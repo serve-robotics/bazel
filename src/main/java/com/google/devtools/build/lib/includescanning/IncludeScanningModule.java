@@ -14,7 +14,6 @@
 package com.google.devtools.build.lib.includescanning;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Supplier;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -22,6 +21,7 @@ import com.google.common.collect.Maps;
 import com.google.common.flogger.GoogleLogger;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.google.devtools.build.lib.actions.ActionExecutionContext;
 import com.google.devtools.build.lib.actions.ActionExecutionMetadata;
 import com.google.devtools.build.lib.actions.ActionGraph;
@@ -29,7 +29,6 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.ArtifactFactory;
 import com.google.devtools.build.lib.actions.ArtifactResolver;
 import com.google.devtools.build.lib.actions.ExecException;
-import com.google.devtools.build.lib.analysis.ArtifactsToOwnerLabels;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.buildtool.BuildRequest;
 import com.google.devtools.build.lib.concurrent.ExecutorUtil;
@@ -63,6 +62,10 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.function.Supplier;
 
 /**
  * Module that provides implementations of {@link CppIncludeExtractionContext},
@@ -111,7 +114,7 @@ public class IncludeScanningModule extends BlazeModule {
   public Iterable<Class<? extends OptionsBase>> getCommandOptions(Command command) {
     return "build".equals(command.name())
         ? ImmutableList.of(IncludeScanningOptions.class)
-        : ImmutableList.<Class<? extends OptionsBase>>of();
+        : ImmutableList.of();
   }
 
   @Override
@@ -219,22 +222,21 @@ public class IncludeScanningModule extends BlazeModule {
    * supplier} which can be used to access the (potentially shared) scanners and exposes {@linkplain
    * #getSwigActionContext() action} {@linkplain #getCppActionContext() contexts} based on them.
    */
-  private static class IncludeScannerLifecycleManager implements ExecutorLifecycleListener {
+  private static final class IncludeScannerLifecycleManager implements ExecutorLifecycleListener {
     private final CommandEnvironment env;
-    private final BuildRequest buildRequest;
+    private final IncludeScanningOptions options;
 
     private final Supplier<SpawnIncludeScanner> spawnScannerSupplier;
     private IncludeScannerSupplier includeScannerSupplier;
     private ExecutorService includePool;
 
-    public IncludeScannerLifecycleManager(
+    IncludeScannerLifecycleManager(
         CommandEnvironment env,
         BuildRequest buildRequest,
         MutableSupplier<SpawnIncludeScanner> spawnScannerSupplier) {
       this.env = env;
-      this.buildRequest = buildRequest;
+      this.options = buildRequest.getOptions(IncludeScanningOptions.class);
 
-      IncludeScanningOptions options = buildRequest.getOptions(IncludeScanningOptions.class);
       spawnScannerSupplier.set(
           new SpawnIncludeScanner(
               env.getExecRoot(),
@@ -254,8 +256,7 @@ public class IncludeScanningModule extends BlazeModule {
 
     @Override
     public void executionPhaseStarting(
-        ActionGraph actionGraph,
-        Supplier<ArtifactsToOwnerLabels> topLevelArtifactsToAccountingGroups)
+        ActionGraph actionGraph, Supplier<ImmutableSet<Artifact>> topLevelArtifacts)
         throws AbruptExitException, InterruptedException {
       try {
         includeScannerSupplier.init(
@@ -280,15 +281,34 @@ public class IncludeScanningModule extends BlazeModule {
     }
 
     @Override
-    public void executionPhaseEnding() {}
+    public void executionPhaseEnding() {
+      if (options.experimentalReuseIncludeScanningThreads) {
+        if (includePool != null && !includePool.isShutdown()) {
+          ExecutorUtil.uninterruptibleShutdownNow(includePool);
+        }
+        includePool = null;
+      }
+    }
 
     @Override
     public void executorCreated() {
-      IncludeScanningOptions options = buildRequest.getOptions(IncludeScanningOptions.class);
       int threads = options.includeScanningParallelism;
       if (threads > 0) {
         logger.atInfo().log("Include scanning configured to use a pool with %d threads", threads);
-        includePool = ExecutorUtil.newSlackPool(threads, "Include scanner");
+        if (options.experimentalReuseIncludeScanningThreads) {
+          includePool =
+              new ThreadPoolExecutor(
+                  threads,
+                  threads,
+                  0L,
+                  TimeUnit.SECONDS,
+                  new SynchronousQueue<Runnable>(),
+                  new ThreadFactoryBuilder().setNameFormat("Include scanner" + " %d").build(),
+                  (r, e) -> r.run());
+        } else {
+          includePool = ExecutorUtil.newSlackPool(threads, "Include scanner");
+        }
+
       } else {
         logger.atInfo().log("Include scanning configured to use a direct executor");
         includePool = MoreExecutors.newDirectExecutorService();

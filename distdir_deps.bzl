@@ -31,13 +31,12 @@ DIST_DEPS = {
             "test_WORKSPACE_files",
         ],
     },
-    "bazel_toolchains": {
-        "archive": "b9bc541aae7bd8e09c6954e2e9da3f7ffe4f77f0.tar.gz",
-        "sha256": "0fe656c3503ee318ba21e3147186b0959ddb8514e4826174e5c178cd1968bdb9",
-        "strip_prefix": "bazel-toolchains-b9bc541aae7bd8e09c6954e2e9da3f7ffe4f77f0",
+    "bazelci_rules": {
+        "archive": "bazelci_rules-1.0.0.tar.gz",
+        "sha256": "eca21884e6f66a88c358e580fd67a6b148d30ab57b1680f62a96c00f9bc6a07e",
+        "strip_prefix": "bazelci_rules-1.0.0",
         "urls": [
-            #TODO(ilist): mirror and update to 4.0.0 version once it is released
-            "https://github.com/bazelbuild/bazel-toolchains/archive/b9bc541aae7bd8e09c6954e2e9da3f7ffe4f77f0.tar.gz",
+            "https://github.com/bazelbuild/continuous-integration/releases/download/rules-1.0.0/bazelci_rules-1.0.0.tar.gz",
         ],
         "used_in": [
             "additional_distfiles",
@@ -109,11 +108,11 @@ DIST_DEPS = {
         ],
     },
     "protocolbuffers": {
-        "archive": "382d5afc60e05470c23e8de19b19fc5ad231e732.tar.gz",
-        "sha256": "7992217989f3156f8109931c1fc6db3434b7414957cb82371552377beaeb9d6c",
+        "archive": "2de300726a1ba2de9a468468dc5ff9ed17a3215f.tar.gz",
+        "sha256": "6a5f67874af66b239b709c572ac1a5a00fdb1b29beaf13c3e6f79b1ba10dc7c4",
         "urls": [
-            "https://mirror.bazel.build/github.com/protocolbuffers/upb/archive/382d5afc60e05470c23e8de19b19fc5ad231e732.tar.gz",
-            "https://github.com/protocolbuffers/upb/archive/382d5afc60e05470c23e8de19b19fc5ad231e732.tar.gz",
+            "https://mirror.bazel.build/github.com/protocolbuffers/upb/archive/2de300726a1ba2de9a468468dc5ff9ed17a3215f.tar.gz",
+            "https://github.com/protocolbuffers/upb/archive/2de300726a1ba2de9a468468dc5ff9ed17a3215f.tar.gz",
         ],
         "used_in": [
             "additional_distfiles",
@@ -121,16 +120,16 @@ DIST_DEPS = {
         ],
     },
     "com_github_grpc_grpc": {
-        "archive": "v1.33.1.tar.gz",
-        "sha256": "58eaee5c0f1bd0b92ebe1fa0606ec8f14798500620e7444726afcaf65041cb63",
-        "strip_prefix": "grpc-1.33.1",
+        "archive": "v1.41.0.tar.gz",
+        "sha256": "e5fb30aae1fa1cffa4ce00aa0bbfab908c0b899fcf0bbc30e268367d660d8656",
+        "strip_prefix": "grpc-1.41.0",
         "urls": [
-            "https://mirror.bazel.build/github.com/grpc/grpc/archive/v1.33.1.tar.gz",
-            "https://github.com/grpc/grpc/archive/v1.33.1.tar.gz",
+            "https://mirror.bazel.build/github.com/grpc/grpc/archive/v1.41.0.tar.gz",
+            "https://github.com/grpc/grpc/archive/v1.41.0.tar.gz",
         ],
         "patch_args": ["-p1"],
         "patches": [
-            "//third_party/grpc:grpc_1.33.1.patch",
+            "//third_party/grpc:grpc_1.41.0.patch",
         ],
         "used_in": [
             "additional_distfiles",
@@ -162,11 +161,11 @@ DIST_DEPS = {
         ],
     },
     "abseil-cpp": {
-        "archive": "df3ea785d8c30a9503321a3d35ee7d35808f190d.tar.gz",
-        "sha256": "f368a8476f4e2e0eccf8a7318b98dafbe30b2600f4e3cf52636e5eb145aba06a",
+        "archive": "997aaf3a28308eba1b9156aa35ab7bca9688e9f6.tar.gz",
+        "sha256": "35f22ef5cb286f09954b7cc4c85b5a3f6221c9d4df6b8c4a1e9d399555b366ee",
         "urls": [
-            "https://mirror.bazel.build/github.com/abseil/abseil-cpp/archive/df3ea785d8c30a9503321a3d35ee7d35808f190d.tar.gz",
-            "https://github.com/abseil/abseil-cpp/archive/df3ea785d8c30a9503321a3d35ee7d35808f190d.tar.gz",
+            "https://mirror.bazel.build/github.com/abseil/abseil-cpp/archive/997aaf3a28308eba1b9156aa35ab7bca9688e9f6.tar.gz",
+            "https://github.com/abseil/abseil-cpp/archive/997aaf3a28308eba1b9156aa35ab7bca9688e9f6.tar.gz",
         ],
         "used_in": [
             "additional_distfiles",
@@ -267,11 +266,11 @@ DIST_DEPS = {
             "remote_java_tools_test",
             "remote_java_tools_for_testing",
         ],
-        "archive": "java_tools-v11.3.zip",
-        "sha256": "52b66d8df456f2ce057d8e435904789463df8414af8110aa13af68ce32d8c4cc",
+        "archive": "java_tools-v11.5.zip",
+        "sha256": "b763ee80e5754e593fd6d5be6d7343f905bc8b73d661d36d842b024ca11b6793",
         "urls": [
-            "https://mirror.bazel.build/bazel_java_tools/releases/java/v11.3/java_tools-v11.3.zip",
-            "https://github.com/bazelbuild/java_tools/releases/download/java_v11.3/java_tools-v11.3.zip",
+            "https://mirror.bazel.build/bazel_java_tools/releases/java/v11.5/java_tools-v11.5.zip",
+            "https://github.com/bazelbuild/java_tools/releases/download/java_v11.5/java_tools-v11.5.zip",
         ],
         "used_in": [
             "additional_distfiles",
@@ -283,11 +282,11 @@ DIST_DEPS = {
             "remote_java_tools_test_linux",
             "remote_java_tools_linux_for_testing",
         ],
-        "archive": "java_tools_linux-v11.3.zip",
-        "sha256": "014fe7305bb0cf2430ca7fc61a2939d4a547d10a1ad47ce909c16235f8f49f46",
+        "archive": "java_tools_linux-v11.5.zip",
+        "sha256": "ae1eca4546eac6487c6e565f9b409536609c273207220c51e5c94f2a058a5a56",
         "urls": [
-            "https://mirror.bazel.build/bazel_java_tools/releases/java/v11.3/java_tools_linux-v11.3.zip",
-            "https://github.com/bazelbuild/java_tools/releases/download/java_v11.3/java_tools_linux-v11.3.zip",
+            "https://mirror.bazel.build/bazel_java_tools/releases/java/v11.5/java_tools_linux-v11.5.zip",
+            "https://github.com/bazelbuild/java_tools/releases/download/java_v11.5/java_tools_linux-v11.5.zip",
         ],
         "used_in": [
             "additional_distfiles",
@@ -299,11 +298,11 @@ DIST_DEPS = {
             "remote_java_tools_test_windows",
             "remote_java_tools_windows_for_testing",
         ],
-        "archive": "java_tools_windows-v11.3.zip",
-        "sha256": "ebb885cc75bfb72ab509de68883ed31638ba2c1a22181636e75c9c731f73fee3",
+        "archive": "java_tools_windows-v11.5.zip",
+        "sha256": "36766802f7ec684cecb1a14c122428de6be9784e88419e2ab5912ad4b59a8c7d",
         "urls": [
-            "https://mirror.bazel.build/bazel_java_tools/releases/java/v11.3/java_tools_windows-v11.3.zip",
-            "https://github.com/bazelbuild/java_tools/releases/download/java_v11.3/java_tools_windows-v11.3.zip",
+            "https://mirror.bazel.build/bazel_java_tools/releases/java/v11.5/java_tools_windows-v11.5.zip",
+            "https://github.com/bazelbuild/java_tools/releases/download/java_v11.5/java_tools_windows-v11.5.zip",
         ],
         "used_in": [
             "additional_distfiles",
@@ -315,11 +314,11 @@ DIST_DEPS = {
             "remote_java_tools_test_darwin",
             "remote_java_tools_darwin_for_testing",
         ],
-        "archive": "java_tools_darwin-v11.3.zip",
-        "sha256": "d09141a35e2c7950f6b7ea344ebd67868146fd2d1ee2b7509cdc36a42786cca4",
+        "archive": "java_tools_darwin-v11.5.zip",
+        "sha256": "792bc1352e736073b152528175ed424687f86a9f6f5f461f07d8b26806762738",
         "urls": [
-            "https://mirror.bazel.build/bazel_java_tools/releases/java/v11.3/java_tools_darwin-v11.3.zip",
-            "https://github.com/bazelbuild/java_tools/releases/download/java_v11.3/java_tools_darwin-v11.3.zip",
+            "https://mirror.bazel.build/bazel_java_tools/releases/java/v11.5/java_tools_darwin-v11.5.zip",
+            "https://github.com/bazelbuild/java_tools/releases/download/java_v11.5/java_tools_darwin-v11.5.zip",
         ],
         "used_in": [
             "additional_distfiles",
@@ -402,17 +401,17 @@ http_archive(
 
 gen_workspace_stanza = rule(
     attrs = {
-        "repos": attr.string_list(doc = "Set of repos to inlcude"),
+        "repos": attr.string_list(doc = "Set of repos to include."),
         "out": attr.output(mandatory = True),
         "preamble": attr.string(doc = "Preamble."),
-        "postamble": attr.string(doc = "setup rules to follow repos."),
+        "postamble": attr.string(doc = "Set of rules to follow repos."),
         "template": attr.label(
-            doc = "Template WORKSPACE file. May not be used with preable or postamble." +
-                  "Repo stanzas can be include with the syntax '{repo name}'.",
+            doc = "Template WORKSPACE file. May not be used with preamble or postamble." +
+                  "Repo stanzas can be included using the syntax '{repo name}'.",
             allow_single_file = True,
             mandatory = False,
         ),
-        "use_maybe": attr.bool(doc = "Use maybe() invocation instead of http_archive"),
+        "use_maybe": attr.bool(doc = "Use maybe() invocation instead of http_archive."),
     },
     doc = "Use specifications from DIST_DEPS to generate WORKSPACE http_archive stanzas or to" +
           "drop them into a template.",

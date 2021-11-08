@@ -14,11 +14,13 @@
 
 package com.google.devtools.build.lib.rules.cpp;
 
+import static com.google.devtools.build.lib.rules.cpp.CcModule.isBuiltIn;
+
 import com.google.common.base.Preconditions;
 import com.google.common.base.Verify;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.CompilationMode;
 import com.google.devtools.build.lib.analysis.config.CoreOptions;
@@ -46,11 +48,13 @@ import javax.annotation.Nullable;
 import net.starlark.java.annot.StarlarkMethod;
 import net.starlark.java.eval.EvalException;
 import net.starlark.java.eval.Module;
+import net.starlark.java.eval.Sequence;
 import net.starlark.java.eval.Starlark;
+import net.starlark.java.eval.StarlarkList;
 import net.starlark.java.eval.StarlarkThread;
 
 /**
- * This class represents the C/C++ parts of the {@link BuildConfiguration}, including the host
+ * This class represents the C/C++ parts of the {@link BuildConfigurationValue}, including the host
  * architecture, target architecture, compiler version, and a standard library version.
  */
 @Immutable
@@ -156,12 +160,6 @@ public final class CppConfiguration extends Fragment
    * possible values see {@code CppModel.getFdoBuildStamp()}.
    */
   public static final String FDO_STAMP_MACRO = "BUILD_FDO_TYPE";
-
-  // TODO(lberki): This is only used for determining the output directory name.
-  // Unfortunately, we can't move it easily to OutputDirectories.buildMnemonic() because the CPU is
-  // currently in the middle of the name of the configuration directory (e.g. it comes after the
-  // Android configuration)
-  private final String cpu;
 
   private final PathFragment fdoPath;
   private final Label fdoOptimizeLabel;
@@ -272,7 +270,6 @@ public final class CppConfiguration extends Fragment
       }
     }
 
-    this.cpu = commonOptions.cpu;
     this.fdoPath = fdoPath;
     this.fdoOptimizeLabel = fdoProfileLabel;
     this.csFdoAbsolutePath = csFdoAbsolutePath;
@@ -374,6 +371,16 @@ public final class CppConfiguration extends Fragment
     return cppOptions.useArgsParamsFile;
   }
 
+  public boolean useCcTestFeature() {
+    return cppOptions.enableCcTestFeature;
+  }
+
+  @Override
+  public boolean useCcTestFeatureStarlark(StarlarkThread thread) throws EvalException {
+    CcModule.checkPrivateStarlarkificationAllowlist(thread);
+    return useCcTestFeature();
+  }
+
   /** Returns whether or not to strip the binaries. */
   public boolean shouldStripBinaries() {
     return stripBinaries;
@@ -385,6 +392,12 @@ public final class CppConfiguration extends Fragment
    */
   public ImmutableList<String> getStripOpts() {
     return ImmutableList.copyOf(cppOptions.stripoptList);
+  }
+
+  @Override
+  public Sequence<String> getStripOptsStarlark(StarlarkThread thread) throws EvalException {
+    CcModule.checkPrivateStarlarkificationAllowlist(thread);
+    return StarlarkList.immutableCopyOf(getStripOpts());
   }
 
   /** Returns whether temporary outputs from gcc will be saved. */
@@ -432,6 +445,12 @@ public final class CppConfiguration extends Fragment
     return cppOptions.buildTestDwp;
   }
 
+  @Override
+  public boolean buildTestDwpIsActivatedStarlark(StarlarkThread thread) throws EvalException {
+    CcModule.checkPrivateStarlarkificationAllowlist(thread);
+    return buildTestDwpIsActivated();
+  }
+
   /**
    * Returns true if all C++ compilations should produce position-independent code, links should
    * produce position-independent executables, and dependencies with equivalent pre-built pic and
@@ -451,6 +470,18 @@ public final class CppConfiguration extends Fragment
   @Nullable
   public String getCompilerFromOptions() {
     return cppOptions.cppCompiler;
+  }
+
+  public boolean experimentalLinkStaticLibrariesOnce() {
+    return cppOptions.experimentalLinkStaticLibrariesOnce;
+  }
+
+  public boolean experimentalEnableTargetExportCheck() {
+    return cppOptions.experimentalEnableTargetExportCheck;
+  }
+
+  public boolean experimentalCcSharedLibraryDebug() {
+    return cppOptions.experimentalCcSharedLibraryDebug;
   }
 
   public boolean legacyWholeArchive() {
@@ -555,7 +586,8 @@ public final class CppConfiguration extends Fragment
 
   @Override
   public String getOutputDirectoryName() {
-    String result = cpu;
+    // Add a tag that will be replaced with the CPU identifier.
+    String result = "{CPU}";
     if (!cppOptions.outputDirectoryTag.isEmpty()) {
       result += "-" + cppOptions.outputDirectoryTag;
     }
@@ -702,6 +734,12 @@ public final class CppConfiguration extends Fragment
     return cppOptions.libcTopLabel;
   }
 
+  @Override
+  public Label getLibcTopLabelStarlark(StarlarkThread thread) throws EvalException {
+    CcModule.checkPrivateStarlarkificationAllowlist(thread);
+    return getLibcTopLabel();
+  }
+
   /**
    * Returns the value of the libc top-level directory (--grte_top) as specified on the command line
    */
@@ -800,6 +838,14 @@ public final class CppConfiguration extends Fragment
     return cppOptions.objcGenerateDotdFiles;
   }
 
+  public boolean experimentalCcImplementationDeps() {
+    return cppOptions.experimentalCcImplementationDeps;
+  }
+
+  public boolean getExperimentalCppCompileResourcesEstimation() {
+    return cppOptions.experimentalCppCompileResourcesEstimation;
+  }
+
   @Override
   public boolean macosSetInstallName() {
     return cppOptions.macosSetInstallName;
@@ -811,7 +857,7 @@ public final class CppConfiguration extends Fragment
         ((BazelModuleContext) Module.ofInnermostEnclosingStarlarkFunction(thread).getClientData())
             .label()
             .getPackageName();
-    if (!EXPANDED_CC_CONFIGURATION_API_ALLOWLIST.contains(rulePackage)) {
+    if (!isBuiltIn(thread) && !EXPANDED_CC_CONFIGURATION_API_ALLOWLIST.contains(rulePackage)) {
       throw Starlark.errorf(
           "Rule in '%s' cannot use '%s' in CppConfiguration", rulePackage, feature);
     }
@@ -837,13 +883,13 @@ public final class CppConfiguration extends Fragment
 
   @Override
   public boolean processHeadersInDependenciesStarlark(StarlarkThread thread) throws EvalException {
-    checkInExpandedApiAllowlist(thread, "process_headers_in_dependencies");
+    CcModule.checkPrivateStarlarkificationAllowlist(thread);
     return processHeadersInDependencies();
   }
 
   @Override
   public boolean saveFeatureStateStarlark(StarlarkThread thread) throws EvalException {
-    checkInExpandedApiAllowlist(thread, "save_feature_state");
+    CcModule.checkPrivateStarlarkificationAllowlist(thread);
     return saveFeatureState();
   }
 
@@ -852,6 +898,26 @@ public final class CppConfiguration extends Fragment
       throws EvalException {
     checkInExpandedApiAllowlist(thread, "fission_active_for_current_compilation_mode");
     return fissionIsActiveForCurrentCompilationMode();
+  }
+
+  @Override
+  public boolean getExperimentalLinkStaticLibrariesOnce(StarlarkThread thread)
+      throws EvalException {
+    CcModule.checkPrivateStarlarkificationAllowlist(thread);
+    return experimentalLinkStaticLibrariesOnce();
+  }
+
+  @Override
+  public boolean getExperimentalEnableTargetExportCheck(StarlarkThread thread)
+      throws EvalException {
+    CcModule.checkPrivateStarlarkificationAllowlist(thread);
+    return experimentalEnableTargetExportCheck();
+  }
+
+  @Override
+  public boolean getExperimentalCcSharedLibraryDebug(StarlarkThread thread) throws EvalException {
+    CcModule.checkPrivateStarlarkificationAllowlist(thread);
+    return experimentalCcSharedLibraryDebug();
   }
 
   /**

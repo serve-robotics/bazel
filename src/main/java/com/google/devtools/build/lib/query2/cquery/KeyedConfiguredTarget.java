@@ -18,7 +18,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider;
 import com.google.devtools.build.lib.cmdline.Label;
-import com.google.devtools.build.lib.skyframe.BuildConfigurationValue;
+import com.google.devtools.build.lib.skyframe.BuildConfigurationKey;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import javax.annotation.Nullable;
 
@@ -49,16 +49,14 @@ public abstract class KeyedConfiguredTarget {
 
   /** Returns the configuration key used for this KeyedConfiguredTarget. */
   @Nullable
-  public BuildConfigurationValue.Key getConfigurationKey() {
+  public BuildConfigurationKey getConfigurationKey() {
     return getConfiguredTarget().getConfigurationKey();
   }
 
   /** Returns the configuration checksum in use for this KeyedConfiguredTarget. */
   @Nullable
   public String getConfigurationChecksum() {
-    return getConfigurationKey() == null
-        ? null
-        : getConfigurationKey().getOptionsDiff().getChecksum();
+    return getConfigurationKey() == null ? null : getConfigurationKey().getOptions().checksum();
   }
 
   /**

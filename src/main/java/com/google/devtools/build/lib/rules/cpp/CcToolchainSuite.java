@@ -13,11 +13,10 @@
 // limitations under the License.
 package com.google.devtools.build.lib.rules.cpp;
 
-
+import com.google.common.base.Strings;
 import com.google.devtools.build.lib.actions.MutableActionGraph.ActionConflictException;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.LicensesProvider;
-import com.google.devtools.build.lib.analysis.MiddlemanProvider;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetBuilder;
 import com.google.devtools.build.lib.analysis.RuleConfiguredTargetFactory;
 import com.google.devtools.build.lib.analysis.RuleContext;
@@ -46,7 +45,7 @@ public class CcToolchainSuite implements RuleConfiguredTargetFactory {
 
     String transformedCpu = ruleContext.getConfiguration().getCpu();
     String compiler = cppConfiguration.getCompilerFromOptions();
-    String key = transformedCpu + (compiler == null ? "" : ("|" + compiler));
+    String key = transformedCpu + (Strings.isNullOrEmpty(compiler) ? "" : ("|" + compiler));
     Map<String, Label> toolchains =
         ruleContext.attributes().get("toolchains", BuildType.LABEL_DICT_UNARY);
     Label selectedCcToolchain = toolchains.get(key);
@@ -93,9 +92,8 @@ public class CcToolchainSuite implements RuleConfiguredTargetFactory {
         new RuleConfiguredTargetBuilder(ruleContext)
             .addNativeDeclaredProvider(ccToolchainProvider)
             .addNativeDeclaredProvider(templateVariableInfo)
-            .setFilesToBuild(ccToolchainProvider.getAllFiles())
-            .addProvider(RunfilesProvider.simple(Runfiles.EMPTY))
-            .addProvider(new MiddlemanProvider(ccToolchainProvider.getAllFilesMiddleman()));
+            .setFilesToBuild(ccToolchainProvider.getAllFilesIncludingLibc())
+            .addProvider(RunfilesProvider.simple(Runfiles.EMPTY));
 
     if (ccToolchainProvider.getLicensesProvider() != null) {
       builder.add(LicensesProvider.class, ccToolchainProvider.getLicensesProvider());

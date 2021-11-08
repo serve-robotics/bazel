@@ -33,7 +33,7 @@ import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.FileProvider;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.configuredtargets.OutputFileConfiguredTarget;
 import com.google.devtools.build.lib.analysis.util.AnalysisTestUtil;
 import com.google.devtools.build.lib.analysis.util.BuildViewTestCase;
@@ -55,9 +55,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import javax.annotation.Nullable;
+import org.junit.Before;
 
 /** Common methods shared between Android related {@link BuildViewTestCase}s. */
 public abstract class AndroidBuildViewTestCase extends BuildViewTestCase {
+
+  @Before
+  public void setupStarlarkJavaLibrary() throws Exception {
+    setBuildLanguageOptions("--experimental_google_legacy_api");
+  }
 
   /** Override this to trigger platform-based Android toolchain resolution. */
   protected boolean platformBasedToolchains() {
@@ -124,7 +130,9 @@ public abstract class AndroidBuildViewTestCase extends BuildViewTestCase {
   }
 
   protected void assertNativeLibrariesCopiedNotLinked(
-      ConfiguredTarget target, BuildConfiguration targetConfiguration, String... expectedLibNames) {
+      ConfiguredTarget target,
+      BuildConfigurationValue targetConfiguration,
+      String... expectedLibNames) {
     Iterable<Artifact> copiedLibs = getNativeLibrariesInApk(target);
     for (Artifact copiedLib : copiedLibs) {
       assertWithMessage("Native libraries were linked to produce " + copiedLib)
@@ -384,14 +392,13 @@ public abstract class AndroidBuildViewTestCase extends BuildViewTestCase {
   }
 
   protected void checkProguardUse(
-      String target,
+      ConfiguredTarget binary,
       String artifact,
       boolean expectMapping,
       @Nullable Integer passes,
       boolean splitOptimizationPass,
       String... expectedlibraryJars)
       throws Exception {
-    ConfiguredTarget binary = getConfiguredTarget(target);
     assertProguardUsed(binary);
     assertProguardGenerated(binary);
 

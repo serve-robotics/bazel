@@ -64,7 +64,7 @@ public abstract class CcImportBaseConfiguredTargetTest extends BuildViewTestCase
     checkError(
         "a",
         "foo",
-        "does not produce any cc_import static_library files " + "(expected .a, .lib or .pic.a)",
+        "does not produce any cc_import static_library files " + "(expected",
         starlarkImplementationLoadStatement,
         "cc_import(",
         "  name = 'foo',",
@@ -73,7 +73,7 @@ public abstract class CcImportBaseConfiguredTargetTest extends BuildViewTestCase
     checkError(
         "b",
         "foo",
-        "does not produce any cc_import shared_library files (expected .so, .dylib or .dll)",
+        "does not produce any cc_import shared_library files (expected",
         starlarkImplementationLoadStatement,
         "cc_import(",
         "  name = 'foo',",
@@ -82,8 +82,7 @@ public abstract class CcImportBaseConfiguredTargetTest extends BuildViewTestCase
     checkError(
         "c",
         "foo",
-        "does not produce any cc_import interface_library files "
-            + "(expected .ifso, .tbd, .lib, .so or .dylib)",
+        "does not produce any cc_import interface_library files " + "(expected",
         starlarkImplementationLoadStatement,
         "cc_import(",
         "  name = 'foo',",
@@ -218,15 +217,57 @@ public abstract class CcImportBaseConfiguredTargetTest extends BuildViewTestCase
   }
 
   @Test
+  public void testCcImportWithVersionedSharedLibraryWithDotInTheName() throws Exception {
+    useConfiguration("--cpu=k8");
+
+    ConfiguredTarget target =
+        scratchConfiguredTarget(
+            "a",
+            "foo",
+            starlarkImplementationLoadStatement,
+            "cc_import(name = 'foo', shared_library = 'libfoo.qux.so.1ab2.1_a2')");
+
+    Artifact dynamicLibrary =
+        target
+            .get(CcInfo.PROVIDER)
+            .getCcLinkingContext()
+            .getLibraries()
+            .getSingleton()
+            .getResolvedSymlinkDynamicLibrary();
+    Iterable<Artifact> dynamicLibrariesForRuntime =
+        target
+            .get(CcInfo.PROVIDER)
+            .getCcLinkingContext()
+            .getDynamicLibrariesForRuntime(/* linkingStatically= */ false);
+    assertThat(artifactsToStrings(ImmutableList.of(dynamicLibrary)))
+        .containsExactly("src a/libfoo.qux.so.1ab2.1_a2");
+    assertThat(artifactsToStrings(dynamicLibrariesForRuntime))
+        .containsExactly("bin _solib_k8/_U_S_Sa_Cfoo___Ua/libfoo.qux.so.1ab2.1_a2");
+  }
+
+  @Test
   public void testCcImportWithInvalidVersionedSharedLibrary() throws Exception {
     checkError(
         "a",
         "foo",
-        "does not produce any cc_import shared_library files " + "(expected .so, .dylib or .dll)",
+        "does not produce any cc_import shared_library files " + "(expected",
         starlarkImplementationLoadStatement,
         "cc_import(",
         "  name = 'foo',",
         "  shared_library = 'libfoo.so.1ab2.ab',",
+        ")");
+  }
+
+  @Test
+  public void testCcImportWithInvalidSharedLibraryNoExtension() throws Exception {
+    checkError(
+        "a",
+        "foo",
+        "does not produce any cc_import shared_library files " + "(expected",
+        starlarkImplementationLoadStatement,
+        "cc_import(",
+        "  name = 'foo',",
+        "  shared_library = 'libfoo',",
         ")");
   }
 

@@ -43,7 +43,7 @@ import com.google.devtools.build.lib.analysis.TransitiveInfoProvider;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine;
 import com.google.devtools.build.lib.analysis.actions.CustomCommandLine.VectorArg;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.config.ExecutionTransitionFactory;
 import com.google.devtools.build.lib.analysis.platform.ToolchainInfo;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -120,6 +120,8 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
           ":android_sdk",
           "aidl_lib", // for the aidl runtime in the android_sdk rule
           "$toolchain", // this is _toolchain in Starlark rules (b/78647825)
+          "$build_stamp_deps", // for build stamp runtime class deps
+          "$build_stamp_mergee_manifest_lib", // for empty build stamp Service class implementation
           // To get from proto_library through proto_lang_toolchain rule to proto runtime library.
           JavaProtoAspectCommon.LITE_PROTO_TOOLCHAIN_ATTR,
           "runtime");
@@ -159,7 +161,7 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
       return true;
     }
     AndroidConfiguration androidConfig =
-        ((BuildConfiguration) obj).getFragment(AndroidConfiguration.class);
+        ((BuildConfigurationValue) obj).getFragment(AndroidConfiguration.class);
     return !androidConfig.incompatibleUseToolchainResolution();
   }
 
@@ -619,10 +621,10 @@ public class DexArchiveAspect extends NativeAspectClass implements ConfiguredAsp
   }
 
   /**
-   * Returns the subset of the given dexopts that are blacklisted from using incremental dexing by
+   * Returns the subset of the given dexopts that are forbidden from using incremental dexing by
    * default.
    */
-  static Iterable<String> blacklistedDexopts(RuleContext ruleContext, List<String> dexopts) {
+  static Iterable<String> forbiddenDexopts(RuleContext ruleContext, List<String> dexopts) {
     return Iterables.filter(
         dexopts,
         new FlagMatcher(

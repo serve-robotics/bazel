@@ -41,8 +41,8 @@ import com.google.devtools.build.lib.analysis.ConfiguredRuleClassProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.ServerDirectories;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollection;
+import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.analysis.config.TransitionResolver;
@@ -89,7 +89,7 @@ import com.google.devtools.build.lib.vfs.Root;
 import com.google.devtools.common.options.Options;
 import com.google.devtools.common.options.OptionsParser;
 import java.util.Arrays;
-import java.util.HashSet;
+import java.util.EnumSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -114,8 +114,6 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
   public enum Flag {
     // The --keep_going flag.
     KEEP_GOING,
-    // Configurations that only include the fragments a target needs to properly analyze.
-    TRIMMED_CONFIGURATIONS,
     // The --skyframe_prepare_analysis flag.
     SKYFRAME_PREPARE_ANALYSIS,
     // Flags for visibility to default to public.
@@ -128,7 +126,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
 
   /** Helper class to make it easy to enable and disable flags. */
   public static final class FlagBuilder {
-    private final Set<Flag> flags = new HashSet<>();
+    private final Set<Flag> flags = EnumSet.noneOf(Flag.class);
 
     public FlagBuilder with(Flag flag) {
       flags.add(flag);
@@ -156,7 +154,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
   protected final ActionKeyContext actionKeyContext = new ActionKeyContext();
 
   // Note that these configurations are virtual (they use only VFS)
-  private BuildConfigurationCollection masterConfig;
+  private BuildConfigurationCollection universeConfig;
 
   private AnalysisResult analysisResult;
   protected SkyframeExecutor skyframeExecutor = null;
@@ -195,8 +193,6 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
         .setFileSystem(fileSystem)
         .setDirectories(directories)
         .setActionKeyContext(actionKeyContext)
-        .setDefaultBuildOptions(
-            DefaultBuildOptionsForTesting.getDefaultBuildOptionsForTest(ruleClassProvider))
         .setWorkspaceStatusActionFactory(workspaceStatusActionFactory)
         .setExtraSkyFunctions(analysisMock.getSkyFunctions(directories))
         .build();
@@ -241,6 +237,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
             PrecomputedValue.injected(
                 RepositoryDelegatorFunction.DEPENDENCY_FOR_UNCONDITIONAL_FETCHING,
                 RepositoryDelegatorFunction.DONT_FETCH_UNCONDITIONALLY),
+            PrecomputedValue.injected(RepositoryDelegatorFunction.ENABLE_BZLMOD, false),
             PrecomputedValue.injected(
                 BuildInfoCollectionFunction.BUILD_INFO_FACTORIES,
                 ruleClassProvider.getBuildInfoFactoriesAsMap())));
@@ -256,7 +253,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
     return AnalysisMock.get();
   }
 
-  protected InternalTestExecutionMode getInternalTestExecutionMode() {
+  protected static InternalTestExecutionMode getInternalTestExecutionMode() {
     return InternalTestExecutionMode.NORMAL;
   }
 
@@ -278,7 +275,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
                         KeepGoingOption.class,
                         LoadingPhaseThreadsOption.class,
                         LoadingOptions.class),
-                    ruleClassProvider.getConfigurationOptions()))
+                    ruleClassProvider.getFragmentRegistry().getOptionsClasses()))
             .build();
     if (defaultFlags().contains(Flag.PUBLIC_VISIBILITY)) {
       optionsParser.parse("--default_visibility=public");
@@ -290,11 +287,9 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
       optionsParser.parse(TestConstants.PRODUCT_SPECIFIC_FLAGS);
     }
     optionsParser.parse(args);
-    if (defaultFlags().contains(Flag.TRIMMED_CONFIGURATIONS)) {
-      optionsParser.parse("--experimental_dynamic_configs=on");
-    }
 
-    buildOptions = ruleClassProvider.createBuildOptions(optionsParser);
+    buildOptions =
+        BuildOptions.of(ruleClassProvider.getFragmentRegistry().getOptionsClasses(), optionsParser);
   }
 
   protected FlagBuilder defaultFlags() {
@@ -320,19 +315,19 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
   }
 
   protected BuildConfigurationCollection getBuildConfigurationCollection() {
-    return masterConfig;
+    return universeConfig;
   }
 
   /**
-   * Returns the target configuration for the most recent build, as created in Blaze's
-   * master configuration creation phase.
+   * Returns the target configuration for the most recent build, as created in Blaze's primary
+   * configuration creation phase.
    */
-  protected BuildConfiguration getTargetConfiguration() throws InterruptedException {
-    return Iterables.getOnlyElement(masterConfig.getTargetConfigurations());
+  protected BuildConfigurationValue getTargetConfiguration() throws InterruptedException {
+    return Iterables.getOnlyElement(universeConfig.getTargetConfigurations());
   }
 
-  protected BuildConfiguration getHostConfiguration() {
-    return masterConfig.getHostConfiguration();
+  protected BuildConfigurationValue getHostConfiguration() {
+    return universeConfig.getHostConfiguration();
   }
 
   protected final void ensureUpdateWasCalled() {
@@ -363,7 +358,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
             outputBase,
             packageOptions.packagePath,
             reporter,
-            rootDirectory,
+            rootDirectory.asFragment(),
             rootDirectory,
             BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY);
     packageOptions.showLoadingProgress = true;
@@ -377,9 +372,9 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
         packageOptions,
         buildLanguageOptions,
         UUID.randomUUID(),
-        ImmutableMap.<String, String>of(),
+        ImmutableMap.of(),
         new TimestampGranularityMonitor(BlazeClock.instance()));
-    skyframeExecutor.setActionEnv(ImmutableMap.<String, String>of());
+    skyframeExecutor.setActionEnv(ImmutableMap.of());
     skyframeExecutor.invalidateFilesUnderPathForTesting(
         reporter, ModifiedFileSet.EVERYTHING_MODIFIED, Root.fromPath(rootDirectory));
 
@@ -412,31 +407,30 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
       buildView.clearAnalysisCache(
           analysisResult.getTargetsToBuild(), analysisResult.getAspectsMap().keySet());
     }
-    masterConfig = analysisResult.getConfigurationCollection();
+    universeConfig = analysisResult.getConfigurationCollection();
     return analysisResult;
   }
 
   protected AnalysisResult update(
       EventBus eventBus, FlagBuilder config, ImmutableList<String> aspects, String... labels)
       throws Exception {
-    return update(
-        eventBus, config, /*explicitTargetPatterns=*/ ImmutableSet.<String>of(), aspects, labels);
+    return update(eventBus, config, /*explicitTargetPatterns=*/ ImmutableSet.of(), aspects, labels);
   }
 
   protected AnalysisResult update(EventBus eventBus, FlagBuilder config, String... labels)
       throws Exception {
-    return update(eventBus, config, /*aspects=*/ ImmutableList.<String>of(), labels);
+    return update(eventBus, config, /*aspects=*/ ImmutableList.of(), labels);
   }
 
   protected AnalysisResult update(FlagBuilder config, String... labels) throws Exception {
-    return update(new EventBus(), config, /*aspects=*/ImmutableList.<String>of(), labels);
+    return update(new EventBus(), config, /*aspects=*/ ImmutableList.of(), labels);
   }
 
   /**
    * Update the BuildView: syncs the package cache; loads and analyzes the given labels.
    */
   protected AnalysisResult update(String... labels) throws Exception {
-    return update(new EventBus(), defaultFlags(), /*aspects=*/ImmutableList.<String>of(), labels);
+    return update(new EventBus(), defaultFlags(), /*aspects=*/ ImmutableList.of(), labels);
   }
 
   protected AnalysisResult update(ImmutableList<String> aspects, String... labels)
@@ -450,7 +444,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
   }
 
   protected ConfiguredTargetAndData getConfiguredTargetAndTarget(
-      String label, BuildConfiguration config) {
+      String label, BuildConfigurationValue config) {
     ensureUpdateWasCalled();
     Label parsedLabel;
     try {
@@ -477,7 +471,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
   }
 
   protected final ConfiguredTargetAndData getConfiguredTargetAndData(
-      String label, BuildConfiguration configuration) {
+      String label, BuildConfigurationValue configuration) {
     ensureUpdateWasCalled();
     return getConfiguredTargetForSkyframe(label, configuration);
   }
@@ -488,7 +482,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
   }
 
   protected final ConfiguredTarget getConfiguredTarget(
-      String label, BuildConfiguration configuration) {
+      String label, BuildConfigurationValue configuration) {
     ConfiguredTargetAndData result = getConfiguredTargetAndData(label, configuration);
     return result == null ? null : result.getConfiguredTarget();
   }
@@ -502,7 +496,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
   }
 
   private ConfiguredTargetAndData getConfiguredTargetForSkyframe(
-      String label, BuildConfiguration configuration) {
+      String label, BuildConfigurationValue configuration) {
     Label parsedLabel;
     try {
       parsedLabel = Label.parseAbsolute(label, ImmutableMap.of());
@@ -530,7 +524,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
     }
   }
 
-  protected final BuildConfiguration getConfiguration(ConfiguredTarget ct) {
+  protected final BuildConfigurationValue getConfiguration(ConfiguredTarget ct) {
     return skyframeExecutor.getConfiguration(reporter, ct.getConfigurationKey());
   }
 
@@ -599,11 +593,9 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
         targetsWithCounts.entrySet().stream()
             .collect(
                 toImmutableMap(
-                    entry -> Label.parseAbsoluteUnchecked(entry.getKey()),
-                    entry -> entry.getValue()));
+                    entry -> Label.parseAbsoluteUnchecked(entry.getKey()), Map.Entry::getValue));
     ImmutableMap<Label, Integer> actual =
-        expected.keySet().stream()
-            .collect(toImmutableMap(label -> label, label -> actualSet.count(label)));
+        expected.keySet().stream().collect(toImmutableMap(label -> label, actualSet::count));
     assertThat(actual).containsExactlyEntriesIn(expected);
   }
 

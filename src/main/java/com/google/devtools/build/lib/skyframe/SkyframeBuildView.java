@@ -47,18 +47,18 @@ import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.ConfiguredTargetFactory;
 import com.google.devtools.build.lib.analysis.ConfiguredTargetValue;
 import com.google.devtools.build.lib.analysis.DependencyKind;
+import com.google.devtools.build.lib.analysis.ExecGroupCollection;
+import com.google.devtools.build.lib.analysis.ExecGroupCollection.InvalidExecGroupException;
 import com.google.devtools.build.lib.analysis.ResolvedToolchainContext;
-import com.google.devtools.build.lib.analysis.RuleContext.InvalidExecGroupException;
 import com.google.devtools.build.lib.analysis.ToolchainCollection;
 import com.google.devtools.build.lib.analysis.TopLevelArtifactContext;
 import com.google.devtools.build.lib.analysis.ViewCreationFailedException;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollection;
+import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.BuildOptions.OptionsDiff;
 import com.google.devtools.build.lib.analysis.config.ConfigConditions;
 import com.google.devtools.build.lib.analysis.config.CoreOptions;
-import com.google.devtools.build.lib.analysis.config.FragmentClassSet;
 import com.google.devtools.build.lib.bugreport.BugReport;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos.BuildEventId.ConfigurationId;
@@ -86,8 +86,10 @@ import com.google.devtools.build.lib.server.FailureDetails.Analysis;
 import com.google.devtools.build.lib.server.FailureDetails.Analysis.Code;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.skyframe.ArtifactConflictFinder.ConflictException;
-import com.google.devtools.build.lib.skyframe.AspectValueKey.AspectKey;
+import com.google.devtools.build.lib.skyframe.AspectKeyCreator.AspectKey;
+import com.google.devtools.build.lib.skyframe.AspectKeyCreator.TopLevelAspectsKey;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor.TopLevelActionConflictReport;
+import com.google.devtools.build.lib.skyframe.ToplevelStarlarkAspectFunction.TopLevelAspectsValue;
 import com.google.devtools.build.lib.util.DetailedExitCode;
 import com.google.devtools.build.lib.util.OrderedSetMultimap;
 import com.google.devtools.build.lib.util.Pair;
@@ -111,6 +113,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import javax.annotation.Nullable;
 
@@ -141,11 +144,7 @@ public final class SkyframeBuildView {
   private final ConfiguredRuleClassProvider ruleClassProvider;
 
   // The host configuration containing all fragments used by this build's transitive closure.
-  private BuildConfiguration topLevelHostConfiguration;
-  // Fragment-limited versions of the host configuration. It's faster to create/cache these here
-  // than to store them in Skyframe.
-  private final Map<BuildConfiguration, BuildConfiguration> hostConfigurationCache =
-      Maps.newConcurrentMap();
+  private BuildConfigurationValue topLevelHostConfiguration;
 
   private BuildConfigurationCollection configurations;
 
@@ -207,15 +206,16 @@ public final class SkyframeBuildView {
       return null;
     }
 
-    ImmutableList<BuildConfiguration> oldTargetConfigs =
+    ImmutableList<BuildConfigurationValue> oldTargetConfigs =
         this.configurations.getTargetConfigurations();
-    ImmutableList<BuildConfiguration> newTargetConfigs = configurations.getTargetConfigurations();
+    ImmutableList<BuildConfigurationValue> newTargetConfigs =
+        configurations.getTargetConfigurations();
 
     // TODO(schmitt): We are only checking the first of the new configurations, even though (through
     //  split transitions) we could have more than one. There is some special handling for
     //  --cpu changing below but other options may also be changed and should be covered.
-    BuildConfiguration oldConfig = oldTargetConfigs.get(0);
-    BuildConfiguration newConfig = newTargetConfigs.get(0);
+    BuildConfigurationValue oldConfig = oldTargetConfigs.get(0);
+    BuildConfigurationValue newConfig = newTargetConfigs.get(0);
     OptionsDiff diff = BuildOptions.diff(oldConfig.getOptions(), newConfig.getOptions());
 
     ImmutableSet<OptionDefinition> nativeCacheInvalidatingDifferences =
@@ -265,9 +265,9 @@ public final class SkyframeBuildView {
   // TODO(schmitt): This method assumes that the only option that can cause multiple target
   //  configurations is --cpu which (with the presence of split transitions) is no longer true.
   private ImmutableSet<OptionDefinition> getNativeCacheInvalidatingDifferences(
-      ImmutableList<BuildConfiguration> oldTargetConfigs,
-      ImmutableList<BuildConfiguration> newTargetConfigs,
-      BuildConfiguration newConfig,
+      ImmutableList<BuildConfigurationValue> oldTargetConfigs,
+      ImmutableList<BuildConfigurationValue> newTargetConfigs,
+      BuildConfigurationValue newConfig,
       OptionsDiff diff) {
     Stream<OptionDefinition> nativeCacheInvalidatingDifferences =
         diff.getFirst().keySet().stream()
@@ -293,9 +293,9 @@ public final class SkyframeBuildView {
           nativeCacheInvalidatingDifferences.filter(
               (definition) -> !CoreOptions.CPU.equals(definition));
       ImmutableSet<String> oldCpus =
-          oldTargetConfigs.stream().map(BuildConfiguration::getCpu).collect(toImmutableSet());
+          oldTargetConfigs.stream().map(BuildConfigurationValue::getCpu).collect(toImmutableSet());
       ImmutableSet<String> newCpus =
-          newTargetConfigs.stream().map(BuildConfiguration::getCpu).collect(toImmutableSet());
+          newTargetConfigs.stream().map(BuildConfigurationValue::getCpu).collect(toImmutableSet());
       if (!Objects.equals(oldCpus, newCpus)) {
         // --experimental_multi_cpu has changed, so inject that in the diff stream.
         nativeCacheInvalidatingDifferences =
@@ -332,12 +332,7 @@ public final class SkyframeBuildView {
         skyframeExecutor.handleAnalysisInvalidatingChange();
       }
     }
-    if (configurations.getTargetConfigurations().stream()
-        .anyMatch(BuildConfiguration::trimConfigurationsRetroactively)) {
-      skyframeExecutor.activateRetroactiveTrimming();
-    } else {
-      skyframeExecutor.deactivateRetroactiveTrimming();
-    }
+
     skyframeAnalysisWasDiscarded = false;
     this.configurations = configurations;
     setTopLevelHostConfiguration(configurations.getHostConfiguration());
@@ -352,13 +347,9 @@ public final class SkyframeBuildView {
   /**
    * Sets the host configuration consisting of all fragments that will be used by the top level
    * targets' transitive closures.
-   *
-   * <p>This is used to power {@link #getHostConfiguration} during analysis, which computes
-   * fragment-trimmed host configurations from the top-level one.
    */
-  private void setTopLevelHostConfiguration(BuildConfiguration topLevelHostConfiguration) {
+  private void setTopLevelHostConfiguration(BuildConfigurationValue topLevelHostConfiguration) {
     if (!topLevelHostConfiguration.equals(this.topLevelHostConfiguration)) {
-      hostConfigurationCache.clear();
       this.topLevelHostConfiguration = topLevelHostConfiguration;
     }
   }
@@ -384,40 +375,59 @@ public final class SkyframeBuildView {
   public SkyframeAnalysisResult configureTargets(
       ExtendedEventHandler eventHandler,
       List<ConfiguredTargetKey> ctKeys,
-      List<AspectValueKey> aspectKeys,
-      Supplier<Map<BuildConfigurationValue.Key, BuildConfiguration>> configurationLookupSupplier,
+      ImmutableList<TopLevelAspectsKey> topLevelAspectsKeys,
+      Supplier<Map<BuildConfigurationKey, BuildConfigurationValue>> configurationLookupSupplier,
       TopLevelArtifactContext topLevelArtifactContextForConflictPruning,
       EventBus eventBus,
       boolean keepGoing,
       int numThreads,
       boolean strictConflictChecks,
-      boolean checkForActionConflicts)
+      boolean checkForActionConflicts,
+      int cpuHeavySkyKeysThreadPoolSize)
       throws InterruptedException, ViewCreationFailedException {
     enableAnalysis(true);
     EvaluationResult<ActionLookupValue> result;
     try (SilentCloseable c = Profiler.instance().profile("skyframeExecutor.configureTargets")) {
       result =
           skyframeExecutor.configureTargets(
-              eventHandler, ctKeys, aspectKeys, keepGoing, numThreads);
+              eventHandler,
+              ctKeys,
+              topLevelAspectsKeys,
+              keepGoing,
+              numThreads,
+              cpuHeavySkyKeysThreadPoolSize);
     } finally {
       enableAnalysis(false);
     }
 
-    Map<AspectKey, ConfiguredAspect> aspects = Maps.newHashMapWithExpectedSize(aspectKeys.size());
+    int numOfAspects = 0;
+    if (!topLevelAspectsKeys.isEmpty()) {
+      numOfAspects =
+          topLevelAspectsKeys.size()
+              * topLevelAspectsKeys.get(0).getTopLevelAspectsClasses().size();
+    }
+    Map<AspectKey, ConfiguredAspect> aspects = Maps.newHashMapWithExpectedSize(numOfAspects);
     Root singleSourceRoot = skyframeExecutor.getForcedSingleSourceRootIfNoExecrootSymlinkCreation();
     NestedSetBuilder<Package> packages =
         singleSourceRoot == null ? NestedSetBuilder.stableOrder() : null;
-    for (AspectValueKey aspectKey : aspectKeys) {
-      AspectValue value = (AspectValue) result.get(aspectKey);
+    ImmutableList.Builder<AspectKey> aspectKeysBuilder = ImmutableList.builder();
+
+    for (TopLevelAspectsKey key : topLevelAspectsKeys) {
+      TopLevelAspectsValue value = (TopLevelAspectsValue) result.get(key);
       if (value == null) {
         // Skip aspects that couldn't be applied to targets.
         continue;
       }
-      aspects.put(value.getKey(), value.getConfiguredAspect());
-      if (packages != null) {
-        packages.addTransitive(value.getTransitivePackagesForPackageRootResolution());
+      for (SkyValue val : value.getTopLevelAspectsValues()) {
+        AspectValue aspectValue = (AspectValue) val;
+        aspects.put(aspectValue.getKey(), aspectValue.getConfiguredAspect());
+        if (packages != null) {
+          packages.addTransitive(aspectValue.getTransitivePackagesForPackageRootResolution());
+        }
+        aspectKeysBuilder.add(aspectValue.getKey());
       }
     }
+    ImmutableList<AspectKey> aspectKeys = aspectKeysBuilder.build();
 
     Collection<ConfiguredTarget> cts = Lists.newArrayListWithCapacity(ctKeys.size());
     for (ConfiguredTargetKey value : ctKeys) {
@@ -452,7 +462,10 @@ public final class SkyframeBuildView {
             skyframeExecutor.getActionLookupValuesInBuild(ctKeys, aspectKeys);
         ArtifactConflictFinder.ActionConflictsAndStats conflictsAndStats =
             ArtifactConflictFinder.findAndStoreArtifactConflicts(
-                analysisTraversalResult.getActionShards(), strictConflictChecks, actionKeyContext);
+                analysisTraversalResult.getActionShards(),
+                analysisTraversalResult.getActionCount(),
+                strictConflictChecks,
+                actionKeyContext);
         BuildEventStreamProtos.BuildMetrics.BuildGraphMetrics buildGraphMetrics =
             analysisTraversalResult
                 .getMetrics()
@@ -548,15 +561,12 @@ public final class SkyframeBuildView {
       for (ActionLookupKey ctKey : Iterables.concat(ctKeys, aspectKeys)) {
         if (!topLevelActionConflictReport.isErrorFree(ctKey)) {
           Optional<ConflictException> e = topLevelActionConflictReport.getConflictException(ctKey);
-          if (!e.isPresent()) {
+          if (e.isEmpty()) {
             continue;
           }
           AnalysisFailedCause failedCause =
               makeArtifactConflictAnalysisFailedCause(configurationLookupSupplier, e.get());
-          BuildConfigurationValue.Key configKey =
-              ctKey instanceof ConfiguredTargetKey
-                  ? ((ConfiguredTargetKey) ctKey).getConfigurationKey()
-                  : ((AspectValueKey) ctKey).getAspectConfigurationKey();
+          BuildConfigurationKey configKey = ctKey.getConfigurationKey();
           eventBus.post(
               new AnalysisFailureEvent(
                   ctKey,
@@ -592,13 +602,9 @@ public final class SkyframeBuildView {
               .collect(toImmutableList());
 
       aspects =
-          aspectKeys.stream()
-              .filter(topLevelActionConflictReport::isErrorFree)
-              .map(result::get)
-              .map(AspectValue.class::cast)
-              .collect(
-                  ImmutableMap.toImmutableMap(
-                      AspectValue::getKey, AspectValue::getConfiguredAspect));
+          aspects.entrySet().stream()
+              .filter(e -> topLevelActionConflictReport.isErrorFree(e.getKey()))
+              .collect(ImmutableMap.toImmutableMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
     return new SkyframeAnalysisResult(
@@ -611,8 +617,83 @@ public final class SkyframeBuildView {
         packageRoots);
   }
 
+  /**
+   * Performs analysis & execution of the CTs and aspects with Skyframe.
+   *
+   * @return the configured targets that should be built along with a WalkableGraph of the analysis.
+   *     TODO(b/199053098) Have a more appropriate return type.
+   */
+  public SkyframeAnalysisResult analyzeAndExecuteTargets(
+      ExtendedEventHandler eventHandler,
+      List<ConfiguredTargetKey> ctKeys,
+      ImmutableList<TopLevelAspectsKey> topLevelAspectsKey,
+      TopLevelArtifactContext topLevelArtifactContextForConflictPruning,
+      boolean keepGoing,
+      int numThreads,
+      int cpuHeavySkyKeysThreadPoolSize,
+      int mergedPhasesExecutionJobsCount)
+      throws InterruptedException {
+    enableAnalysis(true);
+    EvaluationResult<BuildDriverValue> result;
+    List<BuildDriverKey> buildDriverCTKeys =
+        ctKeys.stream()
+            .map(k -> new BuildDriverKey(k, topLevelArtifactContextForConflictPruning))
+            .collect(Collectors.toList());
+    List<BuildDriverKey> buildDriverAspectKeys =
+        topLevelAspectsKey.stream()
+            .map(k -> new BuildDriverKey(k, topLevelArtifactContextForConflictPruning))
+            .collect(Collectors.toList());
+
+    try (SilentCloseable c = Profiler.instance().profile("skyframeExecutor.configureTargets")) {
+      result =
+          skyframeExecutor.evaluateBuildDriverKeys(
+              eventHandler,
+              buildDriverCTKeys,
+              buildDriverAspectKeys,
+              keepGoing,
+              numThreads,
+              cpuHeavySkyKeysThreadPoolSize,
+              mergedPhasesExecutionJobsCount);
+    } finally {
+      enableAnalysis(false);
+    }
+
+    Map<AspectKey, ConfiguredAspect> aspects =
+        Maps.newHashMapWithExpectedSize(topLevelAspectsKey.size());
+    for (BuildDriverKey bdAspectKey : buildDriverAspectKeys) {
+      BuildDriverValue value = result.get(bdAspectKey);
+      if (value == null) {
+        // Skip aspects that couldn't be applied to targets.
+        continue;
+      }
+      TopLevelAspectsValue topLevelAspectsValue = (TopLevelAspectsValue) value.getWrappedSkyValue();
+      for (SkyValue val : topLevelAspectsValue.getTopLevelAspectsValues()) {
+        AspectValue aspectValue = (AspectValue) val;
+        aspects.put(aspectValue.getKey(), aspectValue.getConfiguredAspect());
+      }
+    }
+    Collection<ConfiguredTarget> cts = Lists.newArrayListWithCapacity(ctKeys.size());
+    for (BuildDriverKey bdCTKey : buildDriverCTKeys) {
+      BuildDriverValue value = result.get(bdCTKey);
+      if (value == null) {
+        continue;
+      }
+      ConfiguredTargetValue ctValue = (ConfiguredTargetValue) value.getWrappedSkyValue();
+
+      cts.add(ctValue.getConfiguredTarget());
+    }
+    return new SkyframeAnalysisResult(
+        /*hasLoadingError=*/ false,
+        /*hasAnalysisError=*/ false,
+        foundActionConflict,
+        ImmutableList.copyOf(cts),
+        result.getWalkableGraph(),
+        ImmutableMap.copyOf(aspects),
+        null);
+  }
+
   private static AnalysisFailedCause makeArtifactConflictAnalysisFailedCause(
-      Supplier<Map<BuildConfigurationValue.Key, BuildConfiguration>> configurationLookupSupplier,
+      Supplier<Map<BuildConfigurationKey, BuildConfigurationValue>> configurationLookupSupplier,
       ConflictException e) {
     try {
       throw e.rethrowTyped();
@@ -624,16 +705,16 @@ public final class SkyframeBuildView {
   }
 
   private static AnalysisFailedCause makeArtifactConflictAnalysisFailedCause(
-      Supplier<Map<BuildConfigurationValue.Key, BuildConfiguration>> configurationLookupSupplier,
+      Supplier<Map<BuildConfigurationKey, BuildConfigurationValue>> configurationLookupSupplier,
       ActionConflictException ace) {
     DetailedExitCode detailedExitCode = ace.getDetailedExitCode();
     Label causeLabel = ace.getArtifact().getArtifactOwner().getLabel();
-    BuildConfigurationValue.Key causeConfigKey = null;
+    BuildConfigurationKey causeConfigKey = null;
     if (ace.getArtifact().getArtifactOwner() instanceof ConfiguredTargetKey) {
       causeConfigKey =
           ((ConfiguredTargetKey) ace.getArtifact().getArtifactOwner()).getConfigurationKey();
     }
-    BuildConfiguration causeConfig =
+    BuildConfigurationValue causeConfig =
         causeConfigKey == null ? null : configurationLookupSupplier.get().get(causeConfigKey);
     return new AnalysisFailedCause(
         causeLabel,
@@ -714,14 +795,15 @@ public final class SkyframeBuildView {
    * keepGoing} is false.
    *
    * <p>Visible only for use by tests via {@link
-   * SkyframeExecutor#getConfiguredTargetMapForTesting(ExtendedEventHandler, BuildConfiguration,
-   * Iterable)}. When called there, {@code eventBus} must be null to indicate that this is a test,
-   * and so there may be additional {@link SkyKey}s in the {@code result} that are not {@link
-   * AspectValueKey}s or {@link ConfiguredTargetKey}s. Those keys will be ignored.
+   * SkyframeExecutor#getConfiguredTargetMapForTesting(ExtendedEventHandler,
+   * BuildConfigurationValue, Iterable)}. When called there, {@code eventBus} must be null to
+   * indicate that this is a test, and so there may be additional {@link SkyKey}s in the {@code
+   * result} that are not {@link AspectKeyCreator}s or {@link ConfiguredTargetKey}s. Those keys will
+   * be ignored.
    */
   static Pair<Boolean, ViewCreationFailedException> processErrors(
       EvaluationResult<? extends SkyValue> result,
-      Supplier<Map<BuildConfigurationValue.Key, BuildConfiguration>> configurationLookupSupplier,
+      Supplier<Map<BuildConfigurationKey, BuildConfigurationValue>> configurationLookupSupplier,
       SkyframeExecutor skyframeExecutor,
       ExtendedEventHandler eventHandler,
       boolean keepGoing,
@@ -730,6 +812,7 @@ public final class SkyframeBuildView {
     boolean inTest = eventBus == null;
     boolean hasLoadingError = false;
     ViewCreationFailedException noKeepGoingException = null;
+    ConfiguredTargetKey failedAspectLabel = null; // helps prefer target over aspect failures
     for (Map.Entry<SkyKey, ErrorInfo> errorEntry : result.errorMap().entrySet()) {
       SkyKey errorKey = errorEntry.getKey();
       ErrorInfo errorInfo = errorEntry.getValue();
@@ -739,15 +822,15 @@ public final class SkyframeBuildView {
           .reportCycles(errorInfo.getCycleInfo(), errorKey, eventHandler);
       Exception cause = errorInfo.getException();
       Preconditions.checkState(cause != null || !errorInfo.getCycleInfo().isEmpty(), errorInfo);
-
-      if (errorKey.argument() instanceof AspectValueKey) {
+      if (errorKey.argument() instanceof TopLevelAspectsKey) {
         // We skip Aspects in the keepGoing case; the failures should already have been reported to
         // the event handler.
         if (!keepGoing && noKeepGoingException == null) {
-          AspectValueKey aspectKey = (AspectValueKey) errorKey.argument();
+          TopLevelAspectsKey aspectKey = (TopLevelAspectsKey) errorKey.argument();
+          failedAspectLabel = aspectKey.getBaseConfiguredTargetKey();
           String errorMsg =
               String.format(
-                  "Analysis of aspect '%s' failed; build aborted", aspectKey.getDescription());
+                  "Analysis of aspects '%s' failed; build aborted", aspectKey.getDescription());
           noKeepGoingException = createViewCreationFailedException(cause, errorMsg);
         }
         continue;
@@ -768,7 +851,7 @@ public final class SkyframeBuildView {
       }
       Preconditions.checkState(
           errorKey.argument() instanceof ConfiguredTargetKey,
-          "expected '%s' to be a AspectValueKey or ConfiguredTargetKey",
+          "expected '%s' to be a TopLevelAspectsKey or ConfiguredTargetKey",
           errorKey.argument());
       ConfiguredTargetKey label = (ConfiguredTargetKey) errorKey.argument();
       Label topLevelLabel = label.getLabel();
@@ -813,7 +896,7 @@ public final class SkyframeBuildView {
       } else if (cause instanceof NoSuchPackageException) {
         // This branch is only taken in --nokeep_going builds. In a --keep_going build, the
         // AnalysisFailedCause is properly reported through the ConfiguredValueCreationException.
-        BuildConfiguration configuration =
+        BuildConfigurationValue configuration =
             configurationLookupSupplier.get().get(label.getConfigurationKey());
         ConfigurationId configId = configuration.getEventId().getConfiguration();
         AnalysisFailedCause analysisFailedCause =
@@ -831,14 +914,14 @@ public final class SkyframeBuildView {
                 "errors encountered while analyzing target '"
                     + topLevelLabel
                     + "': it will not be built"));
-      } else if (noKeepGoingException == null) {
+      } else if (noKeepGoingException == null || label.equals(failedAspectLabel)) {
         String errorMsg =
             String.format("Analysis of target '%s' failed; build aborted", topLevelLabel);
         noKeepGoingException = createViewCreationFailedException(cause, errorMsg);
       }
 
       if (!inTest) {
-        BuildConfiguration configuration =
+        BuildConfigurationValue configuration =
             configurationLookupSupplier.get().get(label.getConfigurationKey());
         eventBus.post(
             new AnalysisFailureEvent(
@@ -981,10 +1064,9 @@ public final class SkyframeBuildView {
 
   CachingAnalysisEnvironment createAnalysisEnvironment(
       ActionLookupKey owner,
-      boolean isSystemEnv,
       ExtendedEventHandler eventHandler,
       Environment env,
-      BuildConfiguration config,
+      BuildConfigurationValue config,
       StarlarkBuiltinsValue starlarkBuiltinsValue) {
     boolean extendedSanityChecks = config != null && config.extendedSanityChecks();
     boolean allowAnalysisFailures = config != null && config.allowAnalysisFailures();
@@ -992,7 +1074,6 @@ public final class SkyframeBuildView {
         artifactFactory,
         skyframeExecutor.getActionKeyContext(),
         owner,
-        isSystemEnv,
         extendedSanityChecks,
         allowAnalysisFailures,
         eventHandler,
@@ -1010,12 +1091,13 @@ public final class SkyframeBuildView {
   @Nullable
   ConfiguredTarget createConfiguredTarget(
       Target target,
-      BuildConfiguration configuration,
+      BuildConfigurationValue configuration,
       CachingAnalysisEnvironment analysisEnvironment,
       ConfiguredTargetKey configuredTargetKey,
       OrderedSetMultimap<DependencyKind, ConfiguredTargetAndData> prerequisiteMap,
       ConfigConditions configConditions,
-      @Nullable ToolchainCollection<ResolvedToolchainContext> toolchainContexts)
+      @Nullable ToolchainCollection<ResolvedToolchainContext> toolchainContexts,
+      ExecGroupCollection.Builder execGroupCollectionBuilder)
       throws InterruptedException, ActionConflictException, InvalidExecGroupException {
     Preconditions.checkState(
         enableAnalysis, "Already in execution phase %s %s", target, configuration);
@@ -1027,71 +1109,22 @@ public final class SkyframeBuildView {
         artifactFactory,
         target,
         configuration,
-        getHostConfiguration(configuration),
+        topLevelHostConfiguration,
         configuredTargetKey,
         prerequisiteMap,
         configConditions,
-        toolchainContexts);
+        toolchainContexts,
+        execGroupCollectionBuilder);
   }
 
   /**
-   * Returns the host configuration trimmed to the same fragments as the input configuration. If the
-   * input is null, returns the top-level host configuration.
+   * Returns the top-level host configuration.
    *
    * <p>This may only be called after {@link #setTopLevelHostConfiguration} has set the correct host
    * configuration at the top-level.
    */
-  public BuildConfiguration getHostConfiguration(BuildConfiguration config) {
-    if (config == null) {
-      return topLevelHostConfiguration;
-    }
-    // Currently, a single build doesn't use many different BuildConfiguration instances. Thus,
-    // having a cache per BuildConfiguration is efficient. It might lead to instances of otherwise
-    // identical configurations if multiple of these configs use the same fragment classes. However,
-    // these are cheap especially if there is only a small number of configs. Revisit and turn into
-    // a cache per FragmentClassSet if configuration trimming results in a much higher number of
-    // configuration instances.
-    BuildConfiguration hostConfig = hostConfigurationCache.get(config);
-    if (hostConfig != null) {
-      return hostConfig;
-    }
-    // TODO(bazel-team): have the fragment classes be those required by the consuming target's
-    // transitive closure. This isn't the same as the input configuration's fragment classes -
-    // the latter may be a proper subset of the former.
-    //
-    // ConfigurationFactory.getConfiguration provides the reason why: if a declared required
-    // fragment is evaluated and returns null, it never gets added to the configuration. So if we
-    // use the configuration's fragments as the source of truth, that excludes required fragments
-    // that never made it in.
-    //
-    // If we're just trimming an existing configuration, this is no big deal (if the original
-    // configuration doesn't need the fragment, the trimmed one doesn't either). But this method
-    // trims a host configuration to the same scope as a target configuration. Since their options
-    // are different, the host instance may actually be able to produce the fragment. So it's
-    // wrong and potentially dangerous to unilaterally exclude it.
-    FragmentClassSet fragmentClasses =
-        config.trimConfigurations()
-            ? config.fragmentClasses()
-            : FragmentClassSet.of(ruleClassProvider.getAllFragments());
-    // TODO(bazel-team): investigate getting the trimmed config from Skyframe instead of cloning.
-    // This is the only place we instantiate BuildConfigurations outside of Skyframe, This can
-    // produce surprising effects, such as requesting a configuration that's in the Skyframe cache
-    // but still produces a unique instance because we don't check that cache. It'd be nice to
-    // guarantee that *all* instantiations happen through Skyframe. That could, for example,
-    // guarantee that config1.equals(config2) implies config1 == config2, which is nice for
-    // verifying we don't accidentally create extra configurations. But unfortunately,
-    // hostConfigurationCache was specifically created because Skyframe is too slow for this use
-    // case. So further optimization is necessary to make that viable (proto_library in particular
-    // contributes to much of the difference).
-    BuildConfiguration trimmedConfig =
-        topLevelHostConfiguration.clone(
-            fragmentClasses, ruleClassProvider, skyframeExecutor.getDefaultBuildOptions());
-    hostConfigurationCache.put(config, trimmedConfig);
-    return trimmedConfig;
-  }
-
-  SkyframeDependencyResolver createDependencyResolver(Environment env) {
-    return new SkyframeDependencyResolver(env);
+  public BuildConfigurationValue getHostConfiguration() {
+    return topLevelHostConfiguration;
   }
 
   /**

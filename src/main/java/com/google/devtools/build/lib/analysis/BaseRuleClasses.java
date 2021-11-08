@@ -29,7 +29,7 @@ import static com.google.devtools.build.lib.packages.Type.STRING_LIST;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.config.HostTransition;
 import com.google.devtools.build.lib.analysis.config.RunUnder;
 import com.google.devtools.build.lib.analysis.constraints.ConstraintConstants;
@@ -49,6 +49,7 @@ import com.google.devtools.build.lib.packages.TestSize;
 import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.packages.Type.ConversionException;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.SerializationConstant;
 import com.google.devtools.build.lib.util.FileTypeSet;
 import net.starlark.java.eval.StarlarkInt;
 
@@ -59,21 +60,52 @@ public class BaseRuleClasses {
 
   private BaseRuleClasses() {}
 
-  @AutoCodec @AutoCodec.VisibleForSerialization
+  @SerializationConstant @AutoCodec.VisibleForSerialization
   static final Attribute.ComputedDefault testonlyDefault =
       new Attribute.ComputedDefault() {
         @Override
         public Object getDefault(AttributeMap rule) {
           return rule.getPackageDefaultTestOnly();
         }
+
+        @Override
+        public boolean resolvableWithRawAttributes() {
+          return true;
+        }
       };
 
-  @AutoCodec @AutoCodec.VisibleForSerialization
+  @SerializationConstant @AutoCodec.VisibleForSerialization
   static final Attribute.ComputedDefault deprecationDefault =
       new Attribute.ComputedDefault() {
         @Override
         public Object getDefault(AttributeMap rule) {
           return rule.getPackageDefaultDeprecation();
+        }
+
+        @Override
+        public boolean resolvableWithRawAttributes() {
+          return true;
+        }
+      };
+
+  @SerializationConstant @AutoCodec.VisibleForSerialization
+  public static final Attribute.ComputedDefault TIMEOUT_DEFAULT =
+      new Attribute.ComputedDefault() {
+        @Override
+        public Object getDefault(AttributeMap rule) {
+          TestSize size = TestSize.getTestSize(rule.get("size", Type.STRING));
+          if (size != null) {
+            String timeout = size.getDefaultTimeout().toString();
+            if (timeout != null) {
+              return timeout;
+            }
+          }
+          return "illegal";
+        }
+
+        @Override
+        public boolean resolvableWithRawAttributes() {
+          return true;
         }
       };
 
@@ -86,15 +118,15 @@ public class BaseRuleClasses {
    * they only run on the target configuration and should not operate on action_listeners and
    * extra_actions themselves (to avoid cycles).
    */
-  @AutoCodec @VisibleForTesting
+  @SerializationConstant @AutoCodec.VisibleForSerialization @VisibleForTesting
   static final LabelListLateBoundDefault<?> ACTION_LISTENER =
       LabelListLateBoundDefault.fromTargetConfiguration(
-          BuildConfiguration.class,
+          BuildConfigurationValue.class,
           (rule, attributes, configuration) -> configuration.getActionListeners());
 
   public static final String DEFAULT_COVERAGE_SUPPORT_VALUE = "//tools/test:coverage_support";
 
-  @AutoCodec
+  @SerializationConstant @AutoCodec.VisibleForSerialization
   static final Resolver<TestConfiguration, Label> COVERAGE_SUPPORT_CONFIGURATION_RESOLVER =
       (rule, attributes, configuration) -> configuration.getCoverageSupport();
 
@@ -110,7 +142,7 @@ public class BaseRuleClasses {
   private static final String DEFAULT_COVERAGE_OUTPUT_GENERATOR_VALUE =
       "@bazel_tools//tools/test:lcov_merger";
 
-  @AutoCodec
+  @SerializationConstant @AutoCodec.VisibleForSerialization
   static final Resolver<TestConfiguration, Label> COVERAGE_REPORT_GENERATOR_CONFIGURATION_RESOLVER =
       (rule, attributes, configuration) -> configuration.getCoverageReportGenerator();
 
@@ -120,13 +152,13 @@ public class BaseRuleClasses {
         TestConfiguration.class, defaultValue, COVERAGE_REPORT_GENERATOR_CONFIGURATION_RESOLVER);
   }
 
-  public static LabelLateBoundDefault<BuildConfiguration> getCoverageOutputGeneratorLabel() {
+  public static LabelLateBoundDefault<BuildConfigurationValue> getCoverageOutputGeneratorLabel() {
     return LabelLateBoundDefault.fromTargetConfiguration(
-        BuildConfiguration.class, null, COVERAGE_OUTPUT_GENERATOR_RESOLVER);
+        BuildConfigurationValue.class, null, COVERAGE_OUTPUT_GENERATOR_RESOLVER);
   }
 
-  @AutoCodec
-  static final Resolver<BuildConfiguration, Label> COVERAGE_OUTPUT_GENERATOR_RESOLVER =
+  @SerializationConstant @AutoCodec.VisibleForSerialization
+  static final Resolver<BuildConfigurationValue, Label> COVERAGE_OUTPUT_GENERATOR_RESOLVER =
       (rule, attributes, configuration) -> {
         if (configuration.isCodeCoverageEnabled()) {
           return Label.parseAbsoluteUnchecked(DEFAULT_COVERAGE_OUTPUT_GENERATOR_VALUE);
@@ -137,10 +169,10 @@ public class BaseRuleClasses {
 
   // TODO(b/65746853): provide a way to do this without passing the entire configuration
   /** Implementation for the :run_under attribute. */
-  @AutoCodec
+  @SerializationConstant @AutoCodec.VisibleForSerialization
   public static final LabelLateBoundDefault<?> RUN_UNDER =
       LabelLateBoundDefault.fromTargetConfiguration(
-          BuildConfiguration.class,
+          BuildConfigurationValue.class,
           null,
           (rule, attributes, configuration) -> {
             RunUnder runUnder = configuration.getRunUnder();
@@ -155,7 +187,7 @@ public class BaseRuleClasses {
   public static final class TestBaseRule implements RuleDefinition {
     @Override
     public RuleClass build(RuleClass.Builder builder, RuleDefinitionEnvironment env) {
-      return builder
+      builder
           .addExecGroup(TEST_RUNNER_EXEC_GROUP)
           .requiresConfigurationFragments(TestConfiguration.class)
           // TestConfiguration only needed to create TestAction and TestProvider
@@ -170,20 +202,7 @@ public class BaseRuleClasses {
               attr("timeout", STRING)
                   .taggable()
                   .nonconfigurable("policy decision: should be consistent across configurations")
-                  .value(
-                      new Attribute.ComputedDefault() {
-                        @Override
-                        public Object getDefault(AttributeMap rule) {
-                          TestSize size = TestSize.getTestSize(rule.get("size", Type.STRING));
-                          if (size != null) {
-                            String timeout = size.getDefaultTimeout().toString();
-                            if (timeout != null) {
-                              return timeout;
-                            }
-                          }
-                          return "illegal";
-                        }
-                      }))
+                  .value(TIMEOUT_DEFAULT))
           .add(
               attr("flaky", BOOLEAN)
                   .value(false)
@@ -241,8 +260,15 @@ public class BaseRuleClasses {
                       coverageReportGeneratorAttribute(
                           env.getToolsLabel(DEFAULT_COVERAGE_REPORT_GENERATOR_VALUE))))
           // The target itself and run_under both run on the same machine.
-          .add(attr(":run_under", LABEL).value(RUN_UNDER).skipPrereqValidatorCheck())
-          .build();
+          .add(attr(":run_under", LABEL).value(RUN_UNDER).skipPrereqValidatorCheck());
+
+      env.getNetworkAllowlistForTests()
+          .ifPresent(
+              label ->
+                  builder.add(
+                      Allowlist.getAttributeFromAllowlistName("external_network").value(label)));
+
+      return builder.build();
     }
 
     @Override
@@ -260,7 +286,7 @@ public class BaseRuleClasses {
 
   // Always return the same ImmutableList<Label> for every $test_runtime attribute's default value.
   public static synchronized ImmutableList<Label> getTestRuntimeLabelList(
-      RuleDefinitionContext env) {
+      RuleDefinitionEnvironment env) {
     if (testRuntimeLabelList == null) {
       testRuntimeLabelList =
           ImmutableList.of(
@@ -351,13 +377,17 @@ public class BaseRuleClasses {
                 .allowedFileTypes(FileTypeSet.NO_FILE)
                 // TODO(b/148601291): Require provider to be "LicenseInfo".
                 .dontCheckConstraints()
-                .nonconfigurable("applicable_licenses is not configurable"));
+                .nonconfigurable("applicable_licenses is not configurable"))
+        .add(
+            attr("aspect_hints", LABEL_LIST)
+                .allowedFileTypes(FileTypeSet.NO_FILE)
+                .undocumented("experimental attribute"));
   }
 
   public static RuleClass.Builder execPropertiesAttribute(RuleClass.Builder builder)
       throws ConversionException {
     return builder.add(
-        attr(RuleClass.EXEC_PROPERTIES, STRING_DICT).defaultValue(ImmutableMap.of()));
+        attr(RuleClass.EXEC_PROPERTIES_ATTR, STRING_DICT).defaultValue(ImmutableMap.of()));
   }
 
   /**
@@ -384,9 +414,12 @@ public class BaseRuleClasses {
           // Any rule that has provides its own meaning for the "target_compatible_with" attribute
           // has to be excluded in `RuleContextConstraintSemantics.incompatibleConfiguredTarget()`.
           .add(
-              attr(RuleClass.TARGET_RESTRICTED_TO_ATTR, LABEL_LIST)
+              attr(RuleClass.TARGET_COMPATIBLE_WITH_ATTR, LABEL_LIST)
                   .mandatoryProviders(ConstraintValueInfo.PROVIDER.id())
                   // This should be configurable to allow for complex types of restrictions.
+                  .tool(
+                      "target_compatible_with exists for constraint checking, not to create an"
+                          + " actual dependency")
                   .allowedFileTypes(FileTypeSet.NO_FILE))
           .build();
     }
@@ -442,11 +475,14 @@ public class BaseRuleClasses {
               attr("data", LABEL_LIST)
                   .allowedFileTypes(FileTypeSet.ANY_FILE)
                   .dontCheckConstraints())
-          .add(attr(RuleClass.EXEC_PROPERTIES, Type.STRING_DICT).value(ImmutableMap.of()))
+          .add(attr(RuleClass.EXEC_PROPERTIES_ATTR, Type.STRING_DICT).value(ImmutableMap.of()))
           .add(
               attr(RuleClass.EXEC_COMPATIBLE_WITH_ATTR, BuildType.LABEL_LIST)
                   .allowedFileTypes()
                   .nonconfigurable("Used in toolchain resolution")
+                  .tool(
+                      "exec_compatible_with exists for constraint checking, not to create an"
+                          + " actual dependency")
                   .value(ImmutableList.of()))
           .build();
     }
@@ -483,6 +519,19 @@ public class BaseRuleClasses {
           .type(RuleClassType.ABSTRACT)
           .ancestors(MakeVariableExpandingRule.class)
           .build();
+    }
+  }
+
+  /**
+   * Factory used by rules' definitions that exist for the sole purpose of providing documentation.
+   * For most of these rules, the actual rule is implemented in Starlark but the documentation
+   * generation mechanism does not work yet for Starlark rules. TODO(bazel-team): Delete once
+   * documentation tools work for Starlark.
+   */
+  public static class EmptyRuleConfiguredTargetFactory implements RuleConfiguredTargetFactory {
+    @Override
+    public ConfiguredTarget create(RuleContext ruleContext) {
+      return null;
     }
   }
 }

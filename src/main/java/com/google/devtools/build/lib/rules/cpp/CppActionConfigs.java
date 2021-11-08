@@ -175,6 +175,7 @@ public class CppActionConfigs {
                         "    flag_group {",
                         "      expand_if_all_available: 'per_object_debug_info_file'",
                         "      flag: '-gsplit-dwarf'",
+                        "      flag: '-g'",
                         "    }",
                         "  }")));
       }
@@ -394,6 +395,7 @@ public class CppActionConfigs {
                         "    flag_group {",
                         "      expand_if_all_available: 'propeller_optimize_cc_path'",
                         "      flag: '-fbasic-block-sections=list=%{propeller_optimize_cc_path}'",
+                        "      flag: '-DBUILD_PROPELLER_TYPE=\"full\"'",
                         "    }",
                         "  }",
                         "  flag_set {",

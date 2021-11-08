@@ -35,12 +35,30 @@ public abstract class SingleToolchainResolutionValue implements SkyValue {
 
   // A key representing the input data.
   public static SingleToolchainResolutionKey key(
-      BuildConfigurationValue.Key configurationKey,
+      BuildConfigurationKey configurationKey,
       Label toolchainTypeLabel,
       ConfiguredTargetKey targetPlatformKey,
       List<ConfiguredTargetKey> availableExecutionPlatformKeys) {
+    return key(
+        configurationKey,
+        toolchainTypeLabel,
+        targetPlatformKey,
+        availableExecutionPlatformKeys,
+        false);
+  }
+
+  public static SingleToolchainResolutionKey key(
+      BuildConfigurationKey configurationKey,
+      Label toolchainTypeLabel,
+      ConfiguredTargetKey targetPlatformKey,
+      List<ConfiguredTargetKey> availableExecutionPlatformKeys,
+      boolean debugTarget) {
     return SingleToolchainResolutionKey.create(
-        configurationKey, toolchainTypeLabel, targetPlatformKey, availableExecutionPlatformKeys);
+        configurationKey,
+        toolchainTypeLabel,
+        targetPlatformKey,
+        availableExecutionPlatformKeys,
+        debugTarget);
   }
 
   /** {@link SkyKey} implementation used for {@link SingleToolchainResolutionFunction}. */
@@ -54,7 +72,7 @@ public abstract class SingleToolchainResolutionValue implements SkyValue {
       return SkyFunctions.SINGLE_TOOLCHAIN_RESOLUTION;
     }
 
-    abstract BuildConfigurationValue.Key configurationKey();
+    abstract BuildConfigurationKey configurationKey();
 
     public abstract Label toolchainTypeLabel();
 
@@ -62,17 +80,21 @@ public abstract class SingleToolchainResolutionValue implements SkyValue {
 
     abstract ImmutableList<ConfiguredTargetKey> availableExecutionPlatformKeys();
 
+    abstract boolean debugTarget();
+
     @AutoCodec.Instantiator
     static SingleToolchainResolutionKey create(
-        BuildConfigurationValue.Key configurationKey,
+        BuildConfigurationKey configurationKey,
         Label toolchainTypeLabel,
         ConfiguredTargetKey targetPlatformKey,
-        List<ConfiguredTargetKey> availableExecutionPlatformKeys) {
+        List<ConfiguredTargetKey> availableExecutionPlatformKeys,
+        boolean debugTarget) {
       return new AutoValue_SingleToolchainResolutionValue_SingleToolchainResolutionKey(
           configurationKey,
           toolchainTypeLabel,
           targetPlatformKey,
-          ImmutableList.copyOf(availableExecutionPlatformKeys));
+          ImmutableList.copyOf(availableExecutionPlatformKeys),
+          debugTarget);
     }
   }
 

@@ -24,7 +24,7 @@ import com.google.common.collect.Sets;
 import com.google.devtools.build.lib.analysis.AliasProvider;
 import com.google.devtools.build.lib.analysis.ConfiguredTargetValue;
 import com.google.devtools.build.lib.analysis.TargetAndConfiguration;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.config.transitions.TransitionFactory;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -38,6 +38,7 @@ import com.google.devtools.build.lib.packages.AspectClass;
 import com.google.devtools.build.lib.packages.DependencyFilter;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.Rule;
+import com.google.devtools.build.lib.packages.RuleTransitionData;
 import com.google.devtools.build.lib.packages.Target;
 import com.google.devtools.build.lib.pkgcache.FilteringPolicies;
 import com.google.devtools.build.lib.pkgcache.PackageManager;
@@ -57,7 +58,7 @@ import com.google.devtools.build.lib.query2.engine.ThreadSafeOutputFormatterCall
 import com.google.devtools.build.lib.query2.engine.Uniquifier;
 import com.google.devtools.build.lib.rules.AliasConfiguredTarget;
 import com.google.devtools.build.lib.server.FailureDetails.ConfigurableQuery;
-import com.google.devtools.build.lib.skyframe.AspectValueKey.AspectKey;
+import com.google.devtools.build.lib.skyframe.AspectKeyCreator.AspectKey;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import com.google.devtools.build.lib.skyframe.GraphBackedRecursivePackageProvider;
 import com.google.devtools.build.lib.skyframe.GraphBackedRecursivePackageProvider.UniverseTargetPattern;
@@ -65,10 +66,9 @@ import com.google.devtools.build.lib.skyframe.IgnoredPackagePrefixesValue;
 import com.google.devtools.build.lib.skyframe.PackageValue;
 import com.google.devtools.build.lib.skyframe.RecursivePackageProviderBackedTargetPatternResolver;
 import com.google.devtools.build.lib.skyframe.RecursivePkgValueRootPackageExtractor;
+import com.google.devtools.build.lib.skyframe.SimplePackageIdentifierBatchingCallback;
 import com.google.devtools.build.lib.skyframe.SkyFunctions;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
-import com.google.devtools.build.lib.skyframe.TargetPatternValue;
-import com.google.devtools.build.lib.skyframe.TargetPatternValue.TargetPatternKey;
 import com.google.devtools.build.lib.supplier.InterruptibleSupplier;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.skyframe.SkyKey;
@@ -103,7 +103,7 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
       skyKey -> (ConfiguredTargetKey) skyKey.argument();
 
   protected final TopLevelConfigurations topLevelConfigurations;
-  protected final BuildConfiguration hostConfiguration;
+  protected final BuildConfigurationValue hostConfiguration;
   private final PathFragment parserPrefix;
   private final PathPackageLocator pkgPath;
   private final Supplier<WalkableGraph> walkableGraphSupplier;
@@ -116,7 +116,7 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
       ExtendedEventHandler eventHandler,
       Iterable<QueryFunction> extraFunctions,
       TopLevelConfigurations topLevelConfigurations,
-      BuildConfiguration hostConfiguration,
+      BuildConfigurationValue hostConfiguration,
       PathFragment parserPrefix,
       PathPackageLocator pkgPath,
       Supplier<WalkableGraph> walkableGraphSupplier,
@@ -135,8 +135,8 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
           ExtendedEventHandler eventHandler,
           OutputStream outputStream,
           SkyframeExecutor skyframeExecutor,
-          BuildConfiguration hostConfiguration,
-          @Nullable TransitionFactory<Rule> trimmingTransitionFactory,
+          BuildConfigurationValue hostConfiguration,
+          @Nullable TransitionFactory<RuleTransitionData> trimmingTransitionFactory,
           PackageManager packageManager)
           throws QueryException, InterruptedException;
 
@@ -165,7 +165,8 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
             graphBackedRecursivePackageProvider,
             eventHandler,
             FilteringPolicies.NO_FILTER,
-            MultisetSemaphore.unbounded());
+            MultisetSemaphore.unbounded(),
+            SimplePackageIdentifierBatchingCallback::new);
     checkSettings(settings);
   }
 
@@ -184,7 +185,7 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
     }
   }
 
-  public BuildConfiguration getHostConfiguration() {
+  public BuildConfigurationValue getHostConfiguration() {
     return hostConfiguration;
   }
 
@@ -246,10 +247,7 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
   protected abstract T getValueFromKey(SkyKey key) throws InterruptedException;
 
   protected TargetPattern getPattern(String pattern) throws TargetParsingException {
-    TargetPatternKey targetPatternKey =
-        ((TargetPatternKey)
-            TargetPatternValue.key(pattern, FilteringPolicies.NO_FILTER, parserPrefix).argument());
-    return targetPatternKey.getParsedPattern();
+    return TargetPattern.mainRepoParser(parserPrefix).parse(pattern);
   }
 
   public ThreadSafeMutableSet<T> getFwdDeps(Iterable<T> targets) throws InterruptedException {
@@ -341,7 +339,7 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
     // host config. This is somewhat counterintuitive and subject to change in the future but seems
     // like the best option right now.
     if (settings.contains(Setting.ONLY_TARGET_DEPS)) {
-      BuildConfiguration currentConfig = getConfiguration(target);
+      BuildConfigurationValue currentConfig = getConfiguration(target);
       if (currentConfig != null && currentConfig.isToolConfiguration()) {
         deps =
             deps.stream()
@@ -504,7 +502,7 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
   }
 
   @Nullable
-  protected abstract BuildConfiguration getConfiguration(T target);
+  protected abstract BuildConfigurationValue getConfiguration(T target);
 
   protected abstract ConfiguredTargetKey getSkyKey(T target);
 
@@ -579,18 +577,18 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
   public static class TopLevelConfigurations {
 
     /** A map of non-null configured top-level targets sorted by configuration checksum. */
-    private final ImmutableMap<Label, BuildConfiguration> nonNulls;
+    private final ImmutableMap<Label, BuildConfigurationValue> nonNulls;
     /**
      * {@code nonNulls} may often have many duplicate values in its value set so we store a sorted
      * set of all the non-null configurations here.
      */
-    private final ImmutableSortedSet<BuildConfiguration> nonNullConfigs;
+    private final ImmutableSortedSet<BuildConfigurationValue> nonNullConfigs;
     /** A list of null configured top-level targets. */
     private final ImmutableList<Label> nulls;
 
     public TopLevelConfigurations(
         Collection<TargetAndConfiguration> topLevelTargetsAndConfigurations) {
-      ImmutableMap.Builder<Label, BuildConfiguration> nonNullsBuilder =
+      ImmutableMap.Builder<Label, BuildConfigurationValue> nonNullsBuilder =
           ImmutableMap.builderWithExpectedSize(topLevelTargetsAndConfigurations.size());
       ImmutableList.Builder<Label> nullsBuilder = new ImmutableList.Builder<>();
       for (TargetAndConfiguration targetAndConfiguration : topLevelTargetsAndConfigurations) {
@@ -604,7 +602,7 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
       nonNulls = nonNullsBuilder.build();
       nonNullConfigs =
           ImmutableSortedSet.copyOf(
-              Comparator.comparing(BuildConfiguration::checksum), nonNulls.values());
+              Comparator.comparing(BuildConfigurationValue::checksum), nonNulls.values());
       nulls = nullsBuilder.build();
     }
 
@@ -615,7 +613,7 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
     // This method returns the configuration of a top-level target if it's not null-configured and
     // otherwise returns null (signifying it is null configured).
     @Nullable
-    public BuildConfiguration getConfigurationForTopLevelTarget(Label label) {
+    public BuildConfigurationValue getConfigurationForTopLevelTarget(Label label) {
       Preconditions.checkArgument(
           isTopLevelTarget(label),
           "Attempting to get top-level configuration for non-top-level target %s.",
@@ -623,7 +621,7 @@ public abstract class PostAnalysisQueryEnvironment<T> extends AbstractBlazeQuery
       return nonNulls.get(label);
     }
 
-    public Iterable<BuildConfiguration> getConfigurations() {
+    public Iterable<BuildConfigurationValue> getConfigurations() {
       if (nulls.isEmpty()) {
         return nonNullConfigs;
       } else {

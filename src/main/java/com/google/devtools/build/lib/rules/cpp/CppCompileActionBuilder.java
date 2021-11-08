@@ -24,7 +24,7 @@ import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.RuleContext;
 import com.google.devtools.build.lib.analysis.RuleErrorConsumer;
 import com.google.devtools.build.lib.analysis.actions.ActionConstructionContext;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
@@ -49,7 +49,7 @@ public class CppCompileActionBuilder {
 
   private final ActionOwner owner;
   private boolean shareable;
-  private final BuildConfiguration configuration;
+  private final BuildConfigurationValue configuration;
   private CcToolchainFeatures.FeatureConfiguration featureConfiguration;
   private CcToolchainVariables variables = CcToolchainVariables.EMPTY;
   private Artifact sourceFile;
@@ -80,6 +80,7 @@ public class CppCompileActionBuilder {
   private NestedSet<Artifact> additionalPrunableHeaders =
       NestedSetBuilder.emptySet(Order.STABLE_ORDER);
   private ImmutableList<PathFragment> builtinIncludeDirectories;
+  private ImmutableList<Artifact> additionalOutputs = ImmutableList.of();
   // New fields need to be added to the copy constructor.
 
   /** Creates a builder from a rule and configuration. */
@@ -87,7 +88,7 @@ public class CppCompileActionBuilder {
       ActionConstructionContext actionConstructionContext,
       @Nullable Artifact grepIncludes,
       CcToolchainProvider ccToolchain,
-      BuildConfiguration configuration) {
+      BuildConfigurationValue configuration) {
     this.owner = actionConstructionContext.getActionOwner();
     this.shareable = false;
     this.configuration = configuration;
@@ -136,10 +137,16 @@ public class CppCompileActionBuilder {
     this.actionName = other.actionName;
     this.grepIncludes = other.grepIncludes;
     this.builtinIncludeDirectories = other.builtinIncludeDirectories;
+    this.additionalOutputs = ImmutableList.copyOf(other.additionalOutputs);
   }
 
   public CppCompileActionBuilder setSourceFile(Artifact sourceFile) {
     this.sourceFile = sourceFile;
+    return this;
+  }
+
+  public CppCompileActionBuilder setAdditionalOutputs(ImmutableList<Artifact> additionalOutputs) {
+    this.additionalOutputs = additionalOutputs;
     return this;
   }
 
@@ -297,7 +304,8 @@ public class CppCompileActionBuilder {
             getActionName(),
             cppSemantics,
             builtinIncludeDirectories,
-            grepIncludes);
+            grepIncludes,
+            additionalOutputs);
     return action;
   }
 

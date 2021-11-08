@@ -14,6 +14,8 @@
 
 package com.google.devtools.build.lib.rules.genrule;
 
+import static com.google.common.collect.ImmutableMap.toImmutableMap;
+
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
@@ -47,8 +49,8 @@ import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.TargetUtils;
 import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.util.FileTypeSet;
-import com.google.devtools.build.lib.util.LazyString;
 import com.google.devtools.build.lib.util.OS;
+import com.google.devtools.build.lib.util.OnDemandString;
 import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.util.List;
@@ -67,6 +69,19 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
    * own attributes over and above what is present in {@link GenRuleBaseRule}.
    */
   protected abstract boolean isStampingEnabled(RuleContext ruleContext);
+
+  /** Collects sources from src attribute. */
+  protected ImmutableMap<Label, NestedSet<Artifact>> collectSources(
+      List<? extends TransitiveInfoCollection> srcs) {
+    ImmutableMap.Builder<Label, NestedSet<Artifact>> labelMap = ImmutableMap.builder();
+
+    for (TransitiveInfoCollection dep : srcs) {
+      NestedSet<Artifact> files = dep.getProvider(FileProvider.class).getFilesToBuild();
+      labelMap.put(AliasProvider.getDependencyLabel(dep), files);
+    }
+
+    return labelMap.build();
+  }
 
   enum CommandType {
     BASH,
@@ -104,7 +119,6 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
       throws InterruptedException, RuleErrorException, ActionConflictException {
     NestedSet<Artifact> filesToBuild =
         NestedSetBuilder.wrap(Order.STABLE_ORDER, ruleContext.getOutputArtifacts());
-    NestedSetBuilder<Artifact> resolvedSrcsBuilder = NestedSetBuilder.stableOrder();
 
     if (filesToBuild.isEmpty()) {
       ruleContext.attributeError("outs", "Genrules without outputs don't make sense");
@@ -121,22 +135,18 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
 
     Pair<CommandType, String> cmdTypeAndAttr = determineCommandTypeAndAttribute(ruleContext);
 
-    ImmutableMap.Builder<Label, Iterable<Artifact>> labelMap = ImmutableMap.builder();
-    for (TransitiveInfoCollection dep : ruleContext.getPrerequisites("srcs")) {
-      // This target provides specific types of files for genrules.
-      GenRuleSourcesProvider provider = dep.getProvider(GenRuleSourcesProvider.class);
-      NestedSet<Artifact> files = (provider != null)
-          ? provider.getGenruleFiles()
-          : dep.getProvider(FileProvider.class).getFilesToBuild();
-      resolvedSrcsBuilder.addTransitive(files);
-      // The CommandHelper class makes an explicit copy of this in the constructor, so flattening
-      // here should be benign.
-      labelMap.put(AliasProvider.getDependencyLabel(dep), files.toList());
-    }
-    NestedSet<Artifact> resolvedSrcs = resolvedSrcsBuilder.build();
+    ImmutableMap<Label, NestedSet<Artifact>> labelMap =
+        collectSources(ruleContext.getPrerequisites("srcs"));
+    NestedSet<Artifact> resolvedSrcs = NestedSetBuilder.fromNestedSets(labelMap.values()).build();
 
+    // The CommandHelper class makes an explicit copy of this in the constructor, so flattening
+    // here should be benign.
     CommandHelper commandHelper =
-        commandHelperBuilder(ruleContext).addLabelMap(labelMap.build()).build();
+        commandHelperBuilder(ruleContext)
+            .addLabelMap(
+                labelMap.entrySet().stream()
+                    .collect(toImmutableMap(Map.Entry::getKey, e -> e.getValue().toList())))
+            .build();
 
     if (ruleContext.hasErrors()) {
       return null;
@@ -180,8 +190,8 @@ public abstract class GenRuleBase implements RuleConfiguredTargetFactory {
     String messageAttr = ruleContext.attributes().get("message", Type.STRING);
     String message = messageAttr.isEmpty() ? "Executing genrule" : messageAttr;
     Label label = ruleContext.getLabel();
-    LazyString progressMessage =
-        new LazyString() {
+    OnDemandString progressMessage =
+        new OnDemandString() {
           @Override
           public String toString() {
             return message + " " + label;

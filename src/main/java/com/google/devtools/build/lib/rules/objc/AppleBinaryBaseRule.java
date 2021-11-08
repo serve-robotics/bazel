@@ -43,15 +43,6 @@ import com.google.devtools.build.lib.rules.cpp.CppRuleClasses;
  * Abstract rule definition for apple_binary.
  */
 public class AppleBinaryBaseRule implements RuleDefinition {
-  private final ObjcProtoAspect objcProtoAspect;
-
-  /**
-   * Constructor that returns a newly configured AppleBinaryBaseRule object.
-   */
-  public AppleBinaryBaseRule(ObjcProtoAspect objcProtoAspect) {
-    this.objcProtoAspect = objcProtoAspect;
-  }
-
   /**
    * There are 3 classes of fully linked binaries in Mach: executable, dynamic library, and loadable
    * bundle.
@@ -130,21 +121,26 @@ public class AppleBinaryBaseRule implements RuleDefinition {
                         StarlarkProviderIdentifier.forKey(
                             AppleExecutableBinaryInfo.STARLARK_CONSTRUCTOR.getKey())))
                 .allowedFileTypes()
-                .singleArtifact()
-                .aspect(objcProtoAspect))
+                .singleArtifact())
         /*<!-- #BLAZE_RULE($apple_binary_base_rule).ATTRIBUTE(stamp) -->
-        Enable link stamping.
         Whether to encode build information into the binary. Possible values:
         <ul>
-          <li><code>stamp = 1</code>: Stamp the build information into the
-            binary. Stamped binaries are only rebuilt when their dependencies
-            change. Use this if there are tests that depend on the build
-            information.</li>
-          <li><code>stamp = 0</code>: Always replace build information by constant
-            values. This gives good build result caching.</li>
-          <li><code>stamp = -1</code>: Embedding of build information is controlled
-            by the <a href="../user-manual.html#flag--stamp">--[no]stamp</a> flag.</li>
+          <li>
+            <code>stamp = 1</code>: Always stamp the build information into the binary, even in
+            <a href="../user-manual.html#flag--stamp"><code>--nostamp</code></a> builds. <b>This
+            setting should be avoided</b>, since it potentially kills remote caching for the binary
+            and any downstream actions that depend on it.
+          </li>
+          <li>
+            <code>stamp = 0</code>: Always replace build information by constant values. This
+            gives good build result caching.
+          </li>
+          <li>
+            <code>stamp = -1</code>: Embedding of build information is controlled by the
+            <a href="../user-manual.html#flag--stamp"><code>--[no]stamp</code></a> flag.
+          </li>
         </ul>
+        <p>Stamped binaries are <em>not</em> rebuilt unless their dependencies change.</p>
         <!-- #END_BLAZE_RULE.ATTRIBUTE -->*/
         .add(attr("stamp", TRISTATE).value(TriState.AUTO))
         .add(

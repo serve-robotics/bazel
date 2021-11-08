@@ -38,6 +38,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import javax.annotation.Nullable;
+import net.starlark.java.annot.StarlarkMethod;
 import net.starlark.java.eval.EvalException;
 import net.starlark.java.eval.Printer;
 import net.starlark.java.eval.Sequence;
@@ -109,12 +110,13 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
    * <p>This object is required because linkstamp files may include other headers which will have to
    * be provided during compilation.
    */
+  @Immutable
   public static final class Linkstamp implements LinkstampApi<Artifact> {
     private final Artifact artifact;
     private final NestedSet<Artifact> declaredIncludeSrcs;
     private final byte[] nestedDigest;
 
-    private static final Depset.ElementType TYPE = Depset.ElementType.of(Linkstamp.class);
+    public static final Depset.ElementType TYPE = Depset.ElementType.of(Linkstamp.class);
 
     // TODO(janakr): if action key context is not available, the digest can be computed lazily,
     // only if we are doing an equality comparison and artifacts are equal. That should never
@@ -159,6 +161,11 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
     public int hashCode() {
       // Artifact should be enough to disambiguate basically all the time.
       return artifact.hashCode();
+    }
+
+    @Override
+    public final boolean isImmutable() {
+      return true; // immutable and Starlark-hashable
     }
 
     @Override
@@ -259,6 +266,11 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
 
     public List<Linkstamp> getLinkstamps() {
       return linkstamps;
+    }
+
+    @StarlarkMethod(name = "linkstamps", documented = false, structField = true)
+    public Sequence<Linkstamp> getLinkstampsForStarlark() {
+      return StarlarkList.immutableCopyOf(getLinkstamps());
     }
 
     @Override
@@ -530,6 +542,13 @@ public class CcLinkingContext implements CcLinkingContextApi<Artifact> {
 
   public ExtraLinkTimeLibraries getExtraLinkTimeLibraries() {
     return extraLinkTimeLibraries;
+  }
+
+  @Override
+  public ExtraLinkTimeLibraries getExtraLinkTimeLibrariesForStarlark(StarlarkThread thread)
+      throws EvalException {
+    CcModule.checkPrivateStarlarkificationAllowlist(thread);
+    return getExtraLinkTimeLibraries();
   }
 
   public static Builder builder() {

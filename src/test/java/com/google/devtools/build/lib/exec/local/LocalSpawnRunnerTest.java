@@ -16,6 +16,7 @@ package com.google.devtools.build.lib.exec.local;
 
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth8.assertThat;
+import static com.google.devtools.build.lib.testing.common.DirectoryListingHelper.file;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assume.assumeTrue;
@@ -41,11 +42,17 @@ import com.google.devtools.build.lib.actions.ResourceManager;
 import com.google.devtools.build.lib.actions.ResourceSet;
 import com.google.devtools.build.lib.actions.Spawn;
 import com.google.devtools.build.lib.actions.SpawnResult;
+import com.google.devtools.build.lib.actions.SpawnResult.Status;
 import com.google.devtools.build.lib.actions.cache.MetadataInjector;
+import com.google.devtools.build.lib.actions.cache.VirtualActionInput;
+import com.google.devtools.build.lib.actions.util.ActionsTestUtil;
 import com.google.devtools.build.lib.exec.BinTools;
 import com.google.devtools.build.lib.exec.RunfilesTreeUpdater;
+import com.google.devtools.build.lib.exec.SpawnExecutingEvent;
+import com.google.devtools.build.lib.exec.SpawnInputExpander;
 import com.google.devtools.build.lib.exec.SpawnRunner.ProgressStatus;
 import com.google.devtools.build.lib.exec.SpawnRunner.SpawnExecutionContext;
+import com.google.devtools.build.lib.exec.SpawnSchedulingEvent;
 import com.google.devtools.build.lib.exec.util.SpawnBuilder;
 import com.google.devtools.build.lib.runtime.ProcessWrapper;
 import com.google.devtools.build.lib.shell.JavaSubprocessFactory;
@@ -53,6 +60,7 @@ import com.google.devtools.build.lib.shell.Subprocess;
 import com.google.devtools.build.lib.shell.SubprocessBuilder;
 import com.google.devtools.build.lib.shell.SubprocessBuilder.StreamAction;
 import com.google.devtools.build.lib.shell.SubprocessFactory;
+import com.google.devtools.build.lib.testing.common.DirectoryListingHelper;
 import com.google.devtools.build.lib.testutil.BlazeTestUtils;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.testutil.TestUtils;
@@ -193,6 +201,11 @@ public class LocalSpawnRunnerTest {
     public void close() {
       // Do nothing.
     }
+
+    @Override
+    public long getProcessId() {
+      return 0;
+    }
   }
 
   private static final Spawn SIMPLE_SPAWN =
@@ -249,6 +262,11 @@ public class LocalSpawnRunnerTest {
     }
 
     @Override
+    public SpawnInputExpander getSpawnInputExpander() {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
     public Duration getTimeout() {
       return Duration.ofMillis(timeoutMillis);
     }
@@ -264,8 +282,8 @@ public class LocalSpawnRunnerTest {
     }
 
     @Override
-    public void report(ProgressStatus state, String name) {
-      reportedStatus.add(state);
+    public void report(ProgressStatus progress) {
+      reportedStatus.add(progress);
     }
 
     @Override
@@ -300,19 +318,20 @@ public class LocalSpawnRunnerTest {
   @Before
   public final void suppressLogging() {
     logger = Logger.getLogger(TestedLocalSpawnRunner.class.getName());
-    logger.setFilter(new Filter() {
-      @Override
-      public boolean isLoggable(LogRecord record) {
-        return false;
-      }
-    });
+    logger.setFilter(
+        new Filter() {
+          @Override
+          public boolean isLoggable(LogRecord record) {
+            return false;
+          }
+        });
   }
 
   private FileSystem setupEnvironmentForFakeExecution() {
     // Prevent any subprocess execution at all.
     SubprocessBuilder.setDefaultSubprocessFactory(new SubprocessInterceptor());
     resourceManager.setAvailableResources(
-        ResourceSet.create(/*memoryMb=*/1, /*cpuUsage=*/1, /*localTestCount=*/1));
+        ResourceSet.create(/*memoryMb=*/ 1, /*cpuUsage=*/ 1, /*localTestCount=*/ 1));
     return new InMemoryFileSystem(DigestHashFunction.SHA256);
   }
 
@@ -382,7 +401,8 @@ public class LocalSpawnRunnerTest {
 
     assertThat(policy.lockOutputFilesCalled).isTrue();
     assertThat(policy.reportedStatus)
-        .containsExactly(ProgressStatus.SCHEDULING, ProgressStatus.EXECUTING).inOrder();
+        .containsExactly(SpawnSchedulingEvent.create("local"), SpawnExecutingEvent.create("local"))
+        .inOrder();
   }
 
   @Test
@@ -435,6 +455,36 @@ public class LocalSpawnRunnerTest {
           .asList()
           .containsExactly("--foo", "--bar");
     }
+  }
+
+  @Test
+  public void exec_materializesVirtualInputAsExecutable() throws Exception {
+    FileSystem fs = setupEnvironmentForFakeExecution();
+    SubprocessFactory factory = mock(SubprocessFactory.class);
+    when(factory.create(any())).thenReturn(new FinishedSubprocess(0));
+    SubprocessBuilder.setDefaultSubprocessFactory(factory);
+    Path execRoot = fs.getPath("/execroot");
+    LocalExecutionOptions options = Options.getDefaults(LocalExecutionOptions.class);
+    LocalSpawnRunner runner =
+        new TestedLocalSpawnRunner(
+            execRoot,
+            options,
+            resourceManager,
+            makeProcessWrapper(fs, options),
+            LocalSpawnRunnerTest::keepLocalEnvUnchanged);
+    VirtualActionInput virtualInput = ActionsTestUtil.createVirtualActionInput("input1", "hello");
+    Spawn spawn = new SpawnBuilder("/bin/true").withInput(virtualInput).build();
+    FileOutErr fileOutErr = new FileOutErr(fs.getPath("/out/stdout"), fs.getPath("/out/stderr"));
+    SpawnExecutionContext spawnExecutionContext = new SpawnExecutionContextForTesting(fileOutErr);
+
+    SpawnResult result = runner.exec(spawn, spawnExecutionContext);
+
+    assertThat(result.status()).isEqualTo(Status.SUCCESS);
+    assertThat(DirectoryListingHelper.leafDirectoryEntries(execRoot))
+        .containsExactly(file("input1"));
+    Path inputPath = execRoot.getRelative(virtualInput.getExecPath());
+    assertThat(inputPath.isExecutable()).isTrue();
+    assertThat(FileSystemUtils.readLinesAsLatin1(inputPath)).containsExactly("hello");
   }
 
   @Test
@@ -601,22 +651,24 @@ public class LocalSpawnRunnerTest {
 
     SubprocessFactory factory = mock(SubprocessFactory.class);
     ArgumentCaptor<SubprocessBuilder> captor = ArgumentCaptor.forClass(SubprocessBuilder.class);
-    when(factory.create(captor.capture())).thenReturn(new FinishedSubprocess(3) {
-      private boolean destroyed;
+    when(factory.create(captor.capture()))
+        .thenReturn(
+            new FinishedSubprocess(3) {
+              private boolean destroyed;
 
-      @Override
-      public boolean destroy() {
-        destroyed = true;
-        return true;
-      }
+              @Override
+              public boolean destroy() {
+                destroyed = true;
+                return true;
+              }
 
-      @Override
-      public void waitFor() throws InterruptedException {
-        if (!destroyed) {
-          throw new InterruptedException();
-        }
-      }
-    });
+              @Override
+              public void waitFor() throws InterruptedException {
+                if (!destroyed) {
+                  throw new InterruptedException();
+                }
+              }
+            });
     SubprocessBuilder.setDefaultSubprocessFactory(factory);
 
     LocalExecutionOptions options = Options.getDefaults(LocalExecutionOptions.class);
@@ -764,8 +816,10 @@ public class LocalSpawnRunnerTest {
     SpawnExecutionContextForTesting policy = new SpawnExecutionContextForTesting(fileOutErr);
     policy.timeoutMillis = 123 * 1000L;
 
-    Spawn spawn = new SpawnBuilder("/bin/echo", "Hi!")
-        .withExecutionInfo(ExecutionRequirements.DISABLE_LOCAL_PREFETCH, "").build();
+    Spawn spawn =
+        new SpawnBuilder("/bin/echo", "Hi!")
+            .withExecutionInfo(ExecutionRequirements.DISABLE_LOCAL_PREFETCH, "")
+            .build();
     assertThat(fs.getPath("/execroot").createDirectory()).isTrue();
     runner.execAsync(spawn, policy).get();
     assertThat(policy.prefetchCalled).isFalse();
@@ -796,10 +850,7 @@ public class LocalSpawnRunnerTest {
 
     runner.execAsync(SIMPLE_SPAWN, policy).get();
     verify(localEnvProvider)
-        .rewriteLocalEnv(
-            any(),
-            any(),
-            matches("^/execroot/tmp[0-9a-fA-F]+_[0-9a-fA-F]+/work$"));
+        .rewriteLocalEnv(any(), any(), matches("^/execroot/tmp[0-9a-fA-F]+_[0-9a-fA-F]+/work$"));
   }
 
   /**
@@ -868,8 +919,7 @@ public class LocalSpawnRunnerTest {
     return getTemporaryRoot(fs, "execRoot");
   }
 
-
-  private Path getTemporaryEmbeddedBin(FileSystem fs) throws  IOException {
+  private Path getTemporaryEmbeddedBin(FileSystem fs) throws IOException {
     return getTemporaryRoot(fs, "embedded_bin");
   }
 
@@ -897,8 +947,8 @@ public class LocalSpawnRunnerTest {
 
     Path execRoot = getTemporaryExecRoot(fs);
     Path embeddedBinaries = getTemporaryEmbeddedBin(fs);
-    BinTools binTools = BinTools.forEmbeddedBin(embeddedBinaries,
-        ImmutableList.of("process-wrapper"));
+    BinTools binTools =
+        BinTools.forEmbeddedBin(embeddedBinaries, ImmutableList.of("process-wrapper"));
     Path processWrapperPath = binTools.getEmbeddedPath("process-wrapper");
     copyProcessWrapperIntoExecRoot(processWrapperPath);
     Path cpuTimeSpenderPath = copyCpuTimeSpenderIntoExecRoot(execRoot);
@@ -962,8 +1012,8 @@ public class LocalSpawnRunnerTest {
 
     Path execRoot = getTemporaryExecRoot(fs);
     Path embeddedBinaries = getTemporaryEmbeddedBin(fs);
-    BinTools binTools = BinTools.forEmbeddedBin(embeddedBinaries,
-        ImmutableList.of("process-wrapper"));
+    BinTools binTools =
+        BinTools.forEmbeddedBin(embeddedBinaries, ImmutableList.of("process-wrapper"));
     Path processWrapperPath = binTools.getEmbeddedPath("process-wrapper");
     copyProcessWrapperIntoExecRoot(processWrapperPath);
     Path cpuTimeSpenderPath = copyCpuTimeSpenderIntoExecRoot(execRoot);

@@ -66,6 +66,9 @@ public abstract class Worker {
     return workerKey.getWorkerFilesWithHashes();
   }
 
+  /** Returns true if this worker is sandboxed. */
+  public abstract boolean isSandboxed();
+
   /**
    * Sets the reporter this {@code Worker} should report anomalous events to, or clears it. We
    * expect the reporter to be cleared at end of build.
@@ -120,4 +123,7 @@ public abstract class Worker {
    * received.
    */
   abstract String getRecordingStreamMessage();
+
+  /** Returns process id pf worker, if process started. Otherwise returns -1. */
+  abstract long getProcessId();
 }

@@ -36,7 +36,7 @@ import com.google.devtools.build.lib.actions.FileArtifactValue;
 import com.google.devtools.build.lib.actions.FileStateType;
 import com.google.devtools.build.lib.actions.FileStateValue;
 import com.google.devtools.build.lib.actions.FilesetManifest;
-import com.google.devtools.build.lib.actions.FilesetManifest.RelativeSymlinkBehavior;
+import com.google.devtools.build.lib.actions.FilesetManifest.RelativeSymlinkBehaviorWithoutError;
 import com.google.devtools.build.lib.actions.FilesetOutputSymlink;
 import com.google.devtools.build.lib.actions.cache.MetadataHandler;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
@@ -63,12 +63,13 @@ import javax.annotation.Nullable;
  * action's outputs for purposes of creating the final {@link ActionExecutionValue}.
  *
  * <p>The handler can be in one of two modes. After construction, it acts as a cache for input and
- * output metadata while {@link ActionCacheChecker} determines whether the action needs to be
- * executed. If the action needs to be executed (i.e. no action cache hit), {@link
- * #prepareForActionExecution} is called. This call switches the handler to a mode where it accepts
- * {@linkplain MetadataInjector injected output data}, or otherwise obtains metadata from the
- * filesystem. Freshly created output files are set read-only and executable <em>before</em>
- * statting them to ensure that the stat's ctime is up to date.
+ * output metadata while {@link com.google.devtools.build.lib.actions.ActionCacheChecker} determines
+ * whether the action needs to be executed. If the action needs to be executed (i.e. no action cache
+ * hit), {@link #prepareForActionExecution} is called. This call switches the handler to a mode
+ * where it accepts {@linkplain com.google.devtools.build.lib.actions.cache.MetadataInjector
+ * injected output data}, or otherwise obtains metadata from the filesystem. Freshly created output
+ * files are set read-only and executable <em>before</em> statting them to ensure that the stat's
+ * ctime is up to date.
  *
  * <p>After action execution, {@link #getMetadata} should be called on each of the action's outputs
  * (except those that were {@linkplain #artifactOmitted omitted}) to ensure that declared outputs
@@ -203,22 +204,15 @@ final class ActionMetadataHandler implements MetadataHandler {
       Map<Artifact, ImmutableList<FilesetOutputSymlink>> filesets, PathFragment execRoot) {
     Map<PathFragment, FileArtifactValue> filesetMap = new HashMap<>();
     for (Map.Entry<Artifact, ImmutableList<FilesetOutputSymlink>> entry : filesets.entrySet()) {
-      try {
-        FilesetManifest fileset =
-            FilesetManifest.constructFilesetManifest(
-                entry.getValue(), execRoot, RelativeSymlinkBehavior.RESOLVE);
+      FilesetManifest fileset =
+          FilesetManifest.constructFilesetManifestWithoutError(
+              entry.getValue(), execRoot, RelativeSymlinkBehaviorWithoutError.RESOLVE);
         for (Map.Entry<String, FileArtifactValue> favEntry :
             fileset.getArtifactValues().entrySet()) {
           if (favEntry.getValue().getDigest() != null) {
             filesetMap.put(PathFragment.create(favEntry.getKey()), favEntry.getValue());
           }
         }
-      } catch (IOException e) {
-        // If we cannot get the FileArtifactValue, then we will make a FileSystem call to get the
-        // digest, so it is okay to skip and continue here.
-        logger.atWarning().withCause(e).log(
-            "Could not properly get digest for %s", entry.getKey().getExecPath());
-      }
     }
     return ImmutableMap.copyOf(filesetMap);
   }
@@ -365,8 +359,7 @@ final class ActionMetadataHandler implements MetadataHandler {
         });
 
     if (archivedTreeArtifactsEnabled) {
-      ArchivedTreeArtifact archivedTreeArtifact =
-          ArchivedTreeArtifact.create(parent, derivedPathPrefix);
+      ArchivedTreeArtifact archivedTreeArtifact = ArchivedTreeArtifact.createForTree(parent);
       FileStatus statNoFollow =
           artifactPathResolver.toPath(archivedTreeArtifact).statIfFound(Symlinks.NOFOLLOW);
       if (statNoFollow != null) {
@@ -413,7 +406,6 @@ final class ActionMetadataHandler implements MetadataHandler {
         !output.isTreeArtifact() && !output.isChildOfDeclaredDirectory(),
         "Tree artifacts and their children must be injected via injectTree: %s",
         output);
-    checkState(executionMode.get(), "Tried to inject %s outside of execution", output);
 
     store.putArtifactData(output, metadata);
   }
@@ -422,7 +414,6 @@ final class ActionMetadataHandler implements MetadataHandler {
   public void injectTree(SpecialArtifact output, TreeArtifactValue tree) {
     checkArgument(isKnownOutput(output), "%s is not a declared output of this action", output);
     checkArgument(output.isTreeArtifact(), "Output must be a tree artifact: %s", output);
-    checkState(executionMode.get(), "Tried to inject %s outside of execution", output);
     checkArgument(
         archivedTreeArtifactsEnabled == tree.getArchivedRepresentation().isPresent(),
         "Archived representation presence mismatched for: %s with archivedTreeArtifactsEnabled: %s",
@@ -489,7 +480,7 @@ final class ActionMetadataHandler implements MetadataHandler {
     return MoreObjects.toStringHelper(this)
         .add("outputs", outputs)
         .add("store", store)
-        .add("inputArtifactDataSize", inputArtifactData.size())
+        .add("inputArtifactDataSize", inputArtifactData.sizeForDebugging())
         .toString();
   }
 

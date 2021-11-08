@@ -26,6 +26,7 @@ import com.google.devtools.build.lib.skyframe.serialization.DeserializationConte
 import com.google.devtools.build.lib.skyframe.serialization.SerializationContext;
 import com.google.devtools.build.lib.skyframe.serialization.SerializationException;
 import com.google.devtools.build.lib.starlarkbuildapi.apple.AppleBitcodeModeApi;
+import com.google.devtools.build.lib.util.CPU;
 import com.google.devtools.common.options.Converters.CommaSeparatedOptionListConverter;
 import com.google.devtools.common.options.EnumConverter;
 import com.google.devtools.common.options.Option;
@@ -163,6 +164,17 @@ public class AppleCommandLineOptions extends FragmentOptions {
   public DottedVersion.Option macosMinimumOs;
 
   @Option(
+      name = "host_macos_minimum_os",
+      defaultValue = "null",
+      converter = DottedVersionConverter.class,
+      documentationCategory = OptionDocumentationCategory.OUTPUT_PARAMETERS,
+      effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE},
+      help =
+          "Minimum compatible macOS version for host targets. "
+              + "If unspecified, uses 'macos_sdk_version'.")
+  public DottedVersion.Option hostMacosMinimumOs;
+
+  @Option(
       name = "experimental_prefer_mutual_xcode",
       defaultValue = "true",
       documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
@@ -186,7 +198,8 @@ public class AppleCommandLineOptions extends FragmentOptions {
   public static final String DEFAULT_TVOS_CPU = "x86_64";
 
   /** The default macOS CPU value. */
-  public static final String DEFAULT_MACOS_CPU = "x86_64";
+  public static final String DEFAULT_MACOS_CPU =
+      CPU.getCurrent() == CPU.AARCH64 ? "arm64" : "x86_64";
 
   /** The default Catalyst CPU value. */
   public static final String DEFAULT_CATALYST_CPU = "x86_64";
@@ -382,6 +395,17 @@ public class AppleCommandLineOptions extends FragmentOptions {
               + " option may be provided multiple times.")
   public List<Map.Entry<ApplePlatform.PlatformType, AppleBitcodeMode>> appleBitcodeMode;
 
+  // TODO(b/180572694): Modify the Apple split transition to split the --apple_platforms out into a
+  // single --platform during the transition instead of splitting on the --*_cpus flags.
+  @Option(
+      name = "apple_platforms",
+      converter = CommaSeparatedOptionListConverter.class,
+      defaultValue = "null",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.LOADING_AND_ANALYSIS},
+      help = "Comma-separated list of platforms to use when building Apple binaries.")
+  public List<String> applePlatforms;
+
   /** Returns whether the minimum OS version is explicitly set for the current platform. */
   public DottedVersion getMinimumOsVersion() {
     DottedVersion.Option option;
@@ -475,11 +499,17 @@ public class AppleCommandLineOptions extends FragmentOptions {
     host.watchOsSdkVersion = watchOsSdkVersion;
     host.tvOsSdkVersion = tvOsSdkVersion;
     host.macOsSdkVersion = macOsSdkVersion;
+    host.macosMinimumOs = hostMacosMinimumOs;
     // The host apple platform type will always be MACOS, as no other apple platform type can
     // currently execute build actions. If that were the case, a host_apple_platform_type flag might
     // be needed.
     host.applePlatformType = PlatformType.MACOS;
     host.configurationDistinguisher = ConfigurationDistinguisher.UNKNOWN;
+    // Preseve Xcode selection preferences so that the same Xcode version is used throughout the
+    // build.
+    host.preferMutualXcode = preferMutualXcode;
+    host.includeXcodeExecutionRequirements = includeXcodeExecutionRequirements;
+    host.appleCrosstoolTop = appleCrosstoolTop;
 
     return host;
   }

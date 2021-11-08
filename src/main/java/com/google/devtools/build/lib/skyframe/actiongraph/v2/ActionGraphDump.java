@@ -30,6 +30,8 @@ import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.ConfiguredTargetValue;
 import com.google.devtools.build.lib.analysis.actions.ParameterFileWriteAction;
 import com.google.devtools.build.lib.analysis.actions.SpawnAction;
+import com.google.devtools.build.lib.analysis.actions.Substitution;
+import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
 import com.google.devtools.build.lib.buildeventstream.BuildEvent;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
@@ -70,6 +72,7 @@ public class ActionGraphDump {
       boolean includeArtifacts,
       AqueryActionFilter actionFilters,
       boolean includeParamFiles,
+      boolean deduplicateDepsets,
       AqueryOutputHandler aqueryOutputHandler) {
     this(
         /* actionGraphTargets= */ ImmutableList.of("..."),
@@ -77,6 +80,7 @@ public class ActionGraphDump {
         includeArtifacts,
         actionFilters,
         includeParamFiles,
+        deduplicateDepsets,
         aqueryOutputHandler);
   }
 
@@ -86,6 +90,7 @@ public class ActionGraphDump {
       boolean includeArtifacts,
       AqueryActionFilter actionFilters,
       boolean includeParamFiles,
+      boolean deduplicateDepsets,
       AqueryOutputHandler aqueryOutputHandler) {
     this.actionGraphTargets = ImmutableSet.copyOf(actionGraphTargets);
     this.includeActionCmdLine = includeActionCmdLine;
@@ -97,7 +102,7 @@ public class ActionGraphDump {
     KnownRuleClassStrings knownRuleClassStrings = new KnownRuleClassStrings(aqueryOutputHandler);
     knownArtifacts = new KnownArtifacts(aqueryOutputHandler);
     knownConfigurations = new KnownConfigurations(aqueryOutputHandler);
-    knownNestedSets = new KnownNestedSets(aqueryOutputHandler, knownArtifacts);
+    knownNestedSets = new KnownNestedSets(aqueryOutputHandler, knownArtifacts, deduplicateDepsets);
     knownAspectDescriptors = new KnownAspectDescriptors(aqueryOutputHandler);
     knownTargets = new KnownTargets(aqueryOutputHandler, knownRuleClassStrings);
   }
@@ -201,6 +206,9 @@ public class ActionGraphDump {
     if (actionOwner != null) {
       BuildEvent event = actionOwner.getConfiguration();
       actionBuilder.setConfigurationId(knownConfigurations.dataToIdAndStreamOutputProto(event));
+      if (actionOwner.getExecutionPlatform() != null) {
+        actionBuilder.setExecutionPlatform(actionOwner.getExecutionPlatform().label().toString());
+      }
 
       // Store aspects.
       // Iterate through the aspect path and dump the aspect descriptors.
@@ -227,6 +235,16 @@ public class ActionGraphDump {
 
       actionBuilder.setPrimaryOutputId(
           knownArtifacts.dataToIdAndStreamOutputProto(action.getPrimaryOutput()));
+    }
+
+    if (action instanceof TemplateExpansionAction) {
+      actionBuilder.setTemplateContent(((TemplateExpansionAction) action).getTemplate().toString());
+      for (Substitution substitution : ((TemplateExpansionAction) action).getSubstitutions()) {
+        actionBuilder.addSubstitutions(
+            AnalysisProtosV2.KeyValuePair.newBuilder()
+                .setKey(substitution.getKey())
+                .setValue(substitution.getValue()));
+      }
     }
 
     aqueryOutputHandler.outputAction(actionBuilder.build());

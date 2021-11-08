@@ -29,6 +29,8 @@ import com.google.devtools.build.lib.actions.CommandLineExpansionException;
 import com.google.devtools.build.lib.analysis.AspectValue;
 import com.google.devtools.build.lib.analysis.ConfiguredTargetValue;
 import com.google.devtools.build.lib.analysis.actions.ParameterFileWriteAction;
+import com.google.devtools.build.lib.analysis.actions.Substitution;
+import com.google.devtools.build.lib.analysis.actions.TemplateExpansionAction;
 import com.google.devtools.build.lib.buildeventstream.BuildEvent;
 import com.google.devtools.build.lib.buildeventstream.BuildEventStreamProtos;
 import com.google.devtools.build.lib.events.ExtendedEventHandler;
@@ -45,6 +47,7 @@ import java.io.PrintStream;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -90,8 +93,10 @@ class ActionGraphTextOutputFormatterCallback extends AqueryThreadsafeCallback {
         }
         if (options.useAspects) {
           for (AspectValue aspectValue : accessor.getAspectValues(configuredTargetValue)) {
-            for (ActionAnalysisMetadata action : aspectValue.getActions()) {
-              writeAction(action, printStream);
+            if (aspectValue != null) {
+              for (ActionAnalysisMetadata action : aspectValue.getActions()) {
+                writeAction(action, printStream);
+              }
             }
           }
         }
@@ -137,6 +142,12 @@ class ActionGraphTextOutputFormatterCallback extends AqueryThreadsafeCallback {
           .append("  Configuration: ")
           .append(configProto.getMnemonic())
           .append('\n');
+      if (actionOwner.getExecutionPlatform() != null) {
+        stringBuilder
+            .append("  Execution platform: ")
+            .append(actionOwner.getExecutionPlatform().label().toString())
+            .append("\n");
+      }
 
       // In the case of aspect-on-aspect, AspectDescriptors are listed in
       // topological order of the dependency graph.
@@ -252,7 +263,11 @@ class ActionGraphTextOutputFormatterCallback extends AqueryThreadsafeCallback {
                   /* prettyPrintArgs= */ true,
                   ((CommandAction) action).getArguments(),
                   /* environment= */ null,
-                  /* cwd= */ null))
+                  /* cwd= */ null,
+                  action.getOwner().getConfigurationChecksum(),
+                  action.getExecutionPlatform() == null
+                      ? null
+                      : Objects.toString(action.getExecutionPlatform().label())))
           .append("\n");
     }
 
@@ -286,6 +301,23 @@ class ActionGraphTextOutputFormatterCallback extends AqueryThreadsafeCallback {
                               ShellEscaper.escapeString(e.getValue())))
                   .collect(Collectors.joining(", ")))
           .append("}\n");
+    }
+
+    if (action instanceof TemplateExpansionAction) {
+      stringBuilder
+          .append("  Template: ")
+          .append(((TemplateExpansionAction) action).getTemplate())
+          .append("\n");
+      stringBuilder.append("  Substitutions: [\n");
+      for (Substitution substitution : ((TemplateExpansionAction) action).getSubstitutions()) {
+        stringBuilder
+            .append("    {")
+            .append(substitution.getKey())
+            .append(": ")
+            .append(substitution.getValue())
+            .append("}\n");
+      }
+      stringBuilder.append("  ]\n");
     }
 
     stringBuilder.append('\n');

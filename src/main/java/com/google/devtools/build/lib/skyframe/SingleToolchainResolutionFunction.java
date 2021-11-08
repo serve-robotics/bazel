@@ -21,7 +21,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.devtools.build.lib.analysis.PlatformConfiguration;
-import com.google.devtools.build.lib.analysis.config.BuildConfiguration;
+import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider;
 import com.google.devtools.build.lib.analysis.platform.ConstraintCollection;
 import com.google.devtools.build.lib.analysis.platform.ConstraintSettingInfo;
@@ -58,11 +58,11 @@ public class SingleToolchainResolutionFunction implements SkyFunction {
 
     // This call could be combined with the call below, but this SkyFunction is evaluated so rarely
     // it's not worth optimizing.
-    BuildConfigurationValue value = (BuildConfigurationValue) env.getValue(key.configurationKey());
+    BuildConfigurationValue configuration =
+        (BuildConfigurationValue) env.getValue(key.configurationKey());
     if (env.valuesMissing()) {
       return null;
     }
-    BuildConfiguration configuration = value.getConfiguration();
 
     // Get all toolchains.
     RegisteredToolchainsValue toolchains;
@@ -79,16 +79,18 @@ public class SingleToolchainResolutionFunction implements SkyFunction {
       throw new ToolchainResolutionFunctionException(e);
     }
 
-    // Find the right one.
+    // Check if we are debugging the target or the toolchain type.
     boolean debug =
-        configuration
-            .getFragment(PlatformConfiguration.class)
-            .debugToolchainResolution(key.toolchainTypeLabel());
+        key.debugTarget()
+            || configuration
+                .getFragment(PlatformConfiguration.class)
+                .debugToolchainResolution(key.toolchainTypeLabel());
+
+    // Find the right one.
     return resolveConstraints(
         key.toolchainTypeLabel(),
         key.availableExecutionPlatformKeys(),
         key.targetPlatformKey(),
-        configuration.trimConfigurationsRetroactively(),
         toolchains.registeredToolchains(),
         env,
         debug ? env.getListener() : null);
@@ -104,7 +106,6 @@ public class SingleToolchainResolutionFunction implements SkyFunction {
       Label toolchainTypeLabel,
       List<ConfiguredTargetKey> availableExecutionPlatformKeys,
       ConfiguredTargetKey targetPlatformKey,
-      boolean sanityCheckConfigurations,
       ImmutableList<DeclaredToolchainInfo> toolchains,
       Environment env,
       @Nullable EventHandler eventHandler)
@@ -113,15 +114,14 @@ public class SingleToolchainResolutionFunction implements SkyFunction {
     // Load the PlatformInfo needed to check constraints.
     Map<ConfiguredTargetKey, PlatformInfo> platforms;
     try {
-
       platforms =
           PlatformLookupUtil.getPlatformInfo(
-              new ImmutableList.Builder<ConfiguredTargetKey>()
+              ImmutableList.<ConfiguredTargetKey>builderWithExpectedSize(
+                      availableExecutionPlatformKeys.size() + 1)
                   .add(targetPlatformKey)
                   .addAll(availableExecutionPlatformKeys)
                   .build(),
-              env,
-              sanityCheckConfigurations);
+              env);
       if (env.valuesMissing()) {
         return null;
       }
@@ -318,15 +318,15 @@ public class SingleToolchainResolutionFunction implements SkyFunction {
    * Used to indicate errors during the computation of an {@link SingleToolchainResolutionValue}.
    */
   private static final class ToolchainResolutionFunctionException extends SkyFunctionException {
-    public ToolchainResolutionFunctionException(NoToolchainFoundException e) {
+    ToolchainResolutionFunctionException(NoToolchainFoundException e) {
       super(e, Transience.PERSISTENT);
     }
 
-    public ToolchainResolutionFunctionException(InvalidToolchainLabelException e) {
+    ToolchainResolutionFunctionException(InvalidToolchainLabelException e) {
       super(e, Transience.PERSISTENT);
     }
 
-    public ToolchainResolutionFunctionException(InvalidPlatformException e) {
+    ToolchainResolutionFunctionException(InvalidPlatformException e) {
       super(e, Transience.PERSISTENT);
     }
   }

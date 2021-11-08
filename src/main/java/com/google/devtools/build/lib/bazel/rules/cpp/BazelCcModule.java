@@ -89,6 +89,7 @@ public class BazelCcModule extends CcModule
       Object textualHeaders,
       Object additionalExportedHeaders,
       Sequence<?> includes, // <String> expected
+      Object looseIncludes,
       Sequence<?> quoteIncludes, // <String> expected
       Sequence<?> systemIncludes, // <String> expected
       Sequence<?> frameworkIncludes, // <String> expected
@@ -98,6 +99,7 @@ public class BazelCcModule extends CcModule
       String stripIncludePrefix,
       Sequence<?> userCompileFlags, // <String> expected
       Sequence<?> ccCompilationContexts, // <CcCompilationContext> expected
+      Object implementationCcCompilationContexts,
       String name,
       boolean disallowPicOutputs,
       boolean disallowNopicOutputs,
@@ -110,6 +112,9 @@ public class BazelCcModule extends CcModule
       Object hdrsCheckingMode,
       Object variablesExtension,
       Object language,
+      Object purpose,
+      Object grepIncludes,
+      Object coptsFilter,
       StarlarkThread thread)
       throws EvalException, InterruptedException {
     return compile(
@@ -122,6 +127,7 @@ public class BazelCcModule extends CcModule
         textualHeaders,
         additionalExportedHeaders,
         includes,
+        looseIncludes,
         quoteIncludes,
         systemIncludes,
         frameworkIncludes,
@@ -131,6 +137,7 @@ public class BazelCcModule extends CcModule
         stripIncludePrefix,
         userCompileFlags,
         ccCompilationContexts,
+        implementationCcCompilationContexts,
         name,
         disallowPicOutputs,
         disallowNopicOutputs,
@@ -146,6 +153,8 @@ public class BazelCcModule extends CcModule
         hdrsCheckingMode,
         variablesExtension,
         language,
+        purpose,
+        coptsFilter,
         thread);
   }
 
