@@ -27,7 +27,6 @@ import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.BuildOptionsView;
 import com.google.devtools.build.lib.analysis.config.ConfigurationResolver;
 import com.google.devtools.build.lib.analysis.config.CoreOptions;
-import com.google.devtools.build.lib.analysis.config.FragmentClassSet;
 import com.google.devtools.build.lib.analysis.config.HostTransition;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTransition;
@@ -55,7 +54,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import javax.annotation.Nullable;
 
 /**
  * Prepares for analysis - creates the top-level configurations and evaluates the transitions needed
@@ -81,8 +79,6 @@ final class PrepareAnalysisPhaseFunction implements SkyFunction {
             ? HostTransition.INSTANCE.patch(hostTransitionOptionsView, env.getListener())
             : targetOptions;
 
-    FragmentClassSet allFragments = options.getFragments();
-
     PathFragment platformMappingPath = targetOptions.get(PlatformOptions.class).platformMappings;
     PlatformMappingValue platformMappingValue =
         (PlatformMappingValue) env.getValue(PlatformMappingValue.Key.create(platformMappingPath));
@@ -98,13 +94,11 @@ final class PrepareAnalysisPhaseFunction implements SkyFunction {
     BuildConfigurationKey hostConfigurationKey;
     try {
       hostConfigurationKey =
-          BuildConfigurationKey.withPlatformMapping(
-              platformMappingValue, allFragments, hostOptions);
+          BuildConfigurationKey.withPlatformMapping(platformMappingValue, hostOptions);
       for (BuildOptions buildOptions :
           getTopLevelBuildOptions(targetOptions, options.getMultiCpu())) {
         targetConfigurationKeysBuilder.add(
-            BuildConfigurationKey.withPlatformMapping(
-                platformMappingValue, allFragments, buildOptions));
+            BuildConfigurationKey.withPlatformMapping(platformMappingValue, buildOptions));
       }
     } catch (OptionsParsingException e) {
       throw new PrepareAnalysisPhaseFunctionException(new InvalidConfigurationException(e));
@@ -256,8 +250,6 @@ final class PrepareAnalysisPhaseFunction implements SkyFunction {
       throws InterruptedException, TransitionException, OptionsParsingException {
     Multimap<DependencyKey, BuildConfigurationValue> builder = ArrayListMultimap.create();
 
-    FragmentClassSet allFragments = ruleClassProvider.getFragmentRegistry().getAllFragments();
-
     // Now get the configurations.
     PathFragment platformMappingPath = fromOptions.get(PlatformOptions.class).platformMappings;
     PlatformMappingValue platformMappingValue =
@@ -284,8 +276,7 @@ final class PrepareAnalysisPhaseFunction implements SkyFunction {
               .values();
       for (BuildOptions toOption : toOptions) {
         configSkyKeys.add(
-            BuildConfigurationKey.withPlatformMapping(
-                platformMappingValue, allFragments, toOption));
+            BuildConfigurationKey.withPlatformMapping(platformMappingValue, toOption));
       }
     }
 
@@ -310,7 +301,7 @@ final class PrepareAnalysisPhaseFunction implements SkyFunction {
               .values();
       for (BuildOptions toOption : toOptions) {
         SkyKey configKey =
-            BuildConfigurationKey.withPlatformMapping(platformMappingValue, allFragments, toOption);
+            BuildConfigurationKey.withPlatformMapping(platformMappingValue, toOption);
         BuildConfigurationValue configValue =
             (BuildConfigurationValue) configsResult.get(configKey);
         // configValue will be null here if there was an exception thrown during configuration
@@ -321,12 +312,6 @@ final class PrepareAnalysisPhaseFunction implements SkyFunction {
       }
     }
     return builder;
-  }
-
-  @Nullable
-  @Override
-  public String extractTag(SkyKey skyKey) {
-    return null;
   }
 
   /**

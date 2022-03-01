@@ -18,10 +18,13 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSetMultimap;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.starlarkbuildapi.cpp.CcLinkingOutputsApi;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import javax.annotation.Nullable;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.Sequence;
+import net.starlark.java.eval.StarlarkList;
+import net.starlark.java.eval.StarlarkThread;
 
 /** A structured representation of the link outputs of a C++ rule. */
 public class CcLinkingOutputs implements CcLinkingOutputsApi<Artifact, LtoBackendArtifacts> {
@@ -32,17 +35,14 @@ public class CcLinkingOutputs implements CcLinkingOutputsApi<Artifact, LtoBacken
   @Nullable private final Artifact executable;
 
   private final ImmutableList<LtoBackendArtifacts> allLtoArtifacts;
-  private final ImmutableList<Artifact> linkActionInputs;
 
   private CcLinkingOutputs(
       LibraryToLink libraryToLink,
       Artifact executable,
-      ImmutableList<LtoBackendArtifacts> allLtoArtifacts,
-      ImmutableList<Artifact> linkActionInputs) {
+      ImmutableList<LtoBackendArtifacts> allLtoArtifacts) {
     this.libraryToLink = libraryToLink;
     this.executable = executable;
     this.allLtoArtifacts = allLtoArtifacts;
-    this.linkActionInputs = linkActionInputs;
   }
 
   @Override
@@ -61,8 +61,11 @@ public class CcLinkingOutputs implements CcLinkingOutputsApi<Artifact, LtoBacken
     return allLtoArtifacts;
   }
 
-  public ImmutableList<Artifact> getLinkActionInputs() {
-    return linkActionInputs;
+  @Override
+  public Sequence<LtoBackendArtifacts> getAllLtoArtifactsForStarlark(StarlarkThread thread)
+      throws EvalException {
+    CcModule.checkPrivateStarlarkificationAllowlist(thread);
+    return StarlarkList.immutableCopyOf(getAllLtoArtifacts());
   }
 
   public boolean isEmpty() {
@@ -118,11 +121,9 @@ public class CcLinkingOutputs implements CcLinkingOutputsApi<Artifact, LtoBacken
     // same list return the .pdb file for Windows.
     private final ImmutableList.Builder<LtoBackendArtifacts> allLtoArtifacts =
         ImmutableList.builder();
-    private final ImmutableList.Builder<Artifact> linkActionInputs = ImmutableList.builder();
 
     public CcLinkingOutputs build() {
-      return new CcLinkingOutputs(
-          libraryToLink, executable, allLtoArtifacts.build(), linkActionInputs.build());
+      return new CcLinkingOutputs(libraryToLink, executable, allLtoArtifacts.build());
     }
 
     public Builder setLibraryToLink(LibraryToLink libraryToLink) {
@@ -137,11 +138,6 @@ public class CcLinkingOutputs implements CcLinkingOutputsApi<Artifact, LtoBacken
 
     public Builder addAllLtoArtifacts(Iterable<LtoBackendArtifacts> allLtoArtifacts) {
       this.allLtoArtifacts.addAll(allLtoArtifacts);
-      return this;
-    }
-
-    public Builder addLinkActionInputs(NestedSet<Artifact> linkActionInputs) {
-      this.linkActionInputs.addAll(linkActionInputs.toList());
       return this;
     }
   }

@@ -151,7 +151,7 @@ public class ConfigRuleClasses {
                       new ComputedDefault() {
                         @Override
                         public Object getDefault(AttributeMap rule) {
-                          return env.getToolsRepository();
+                          return env.getToolsRepository().strippedName();
                         }
                       }))
 
@@ -321,7 +321,7 @@ public class ConfigRuleClasses {
      additional constraint values beyond these two.
   </p>
 
-  <pre class=""code">
+  <pre class="code">
   config_setting(
       name = "64bit_glibc_2_25",
       constraint_values = [

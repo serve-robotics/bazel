@@ -22,7 +22,6 @@ import static com.google.common.util.concurrent.Futures.immediateFuture;
 import static com.google.common.util.concurrent.Futures.transform;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static com.google.devtools.build.lib.remote.RemoteCache.createFailureDetail;
-import static com.google.devtools.build.lib.remote.RemoteCache.waitForBulkTransfer;
 import static com.google.devtools.build.lib.remote.util.Utils.getFromFuture;
 import static com.google.devtools.build.lib.remote.util.Utils.getInMemoryOutputPath;
 import static com.google.devtools.build.lib.remote.util.Utils.grpcAwareErrorMessage;
@@ -34,6 +33,7 @@ import static com.google.devtools.build.lib.remote.util.Utils.shouldDownloadAllS
 import static com.google.devtools.build.lib.remote.util.Utils.shouldUploadLocalResultsToCombinedDisk;
 import static com.google.devtools.build.lib.remote.util.Utils.shouldUploadLocalResultsToDiskCache;
 import static com.google.devtools.build.lib.remote.util.Utils.shouldUploadLocalResultsToRemoteCache;
+import static com.google.devtools.build.lib.remote.util.Utils.waitForBulkTransfer;
 
 import build.bazel.remote.execution.v2.Action;
 import build.bazel.remote.execution.v2.ActionResult;
@@ -73,6 +73,7 @@ import com.google.devtools.build.lib.actions.Artifact.SpecialArtifact;
 import com.google.devtools.build.lib.actions.Artifact.TreeFileArtifact;
 import com.google.devtools.build.lib.actions.EnvironmentalExecException;
 import com.google.devtools.build.lib.actions.ExecException;
+import com.google.devtools.build.lib.actions.ExecutionRequirements;
 import com.google.devtools.build.lib.actions.FileArtifactValue.RemoteFileArtifactValue;
 import com.google.devtools.build.lib.actions.ForbiddenActionInputException;
 import com.google.devtools.build.lib.actions.MetadataProvider;
@@ -131,14 +132,17 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Objects;
+import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
+import java.util.concurrent.Phaser;
 import java.util.concurrent.atomic.AtomicBoolean;
 import javax.annotation.Nullable;
 
@@ -160,6 +164,8 @@ public class RemoteExecutionService {
   private final ImmutableSet<PathFragment> filesToDownload;
   @Nullable private final Path captureCorruptedOutputsDir;
   private final Cache<Object, MerkleTree> merkleTreeCache;
+  private final Set<String> reportedErrors = new HashSet<>();
+  private final Phaser backgroundTaskPhaser = new Phaser(1);
 
   private final Scheduler scheduler;
 
@@ -307,6 +313,11 @@ public class RemoteExecutionService {
       return actionKey.getDigest().getHash();
     }
 
+    /** Returns underlying {@link Action} of this remote action. */
+    public Action getAction() {
+      return action;
+    }
+
     /**
      * Returns a {@link SortedMap} which maps from input paths for remote action to {@link
      * ActionInput}.
@@ -420,6 +431,22 @@ public class RemoteExecutionService {
     return MerkleTree.merge(subMerkleTrees, digestUtil);
   }
 
+  @Nullable
+  private static ByteString buildSalt(Spawn spawn) {
+    String workspace =
+        spawn.getExecutionInfo().get(ExecutionRequirements.DIFFERENTIATE_WORKSPACE_CACHE);
+    if (workspace != null) {
+      Platform platform =
+          Platform.newBuilder()
+              .addProperties(
+                  Platform.Property.newBuilder().setName("workspace").setValue(workspace).build())
+              .build();
+      return platform.toByteString();
+    }
+
+    return null;
+  }
+
   /** Creates a new {@link RemoteAction} instance from spawn. */
   public RemoteAction buildRemoteAction(Spawn spawn, SpawnExecutionContext context)
       throws IOException, UserExecException, ForbiddenActionInputException {
@@ -442,7 +469,8 @@ public class RemoteExecutionService {
             merkleTree.getRootDigest(),
             platform,
             context.getTimeout(),
-            Spawns.mayBeCachedRemotely(spawn));
+            Spawns.mayBeCachedRemotely(spawn),
+            buildSalt(spawn));
 
     ActionKey actionKey = digestUtil.computeActionKey(action);
 
@@ -956,7 +984,8 @@ public class RemoteExecutionService {
           localPath, new SymlinkMetadata(localPath, PathFragment.create(symlink.getTarget())));
     }
 
-    return new ActionResultMetadata(files.build(), symlinks.build(), directories.build());
+    return new ActionResultMetadata(
+        files.buildOrThrow(), symlinks.buildOrThrow(), directories.buildOrThrow());
   }
 
   /**
@@ -1032,12 +1061,14 @@ public class RemoteExecutionService {
     }
 
     FileOutErr.dump(tmpOutErr, outErr);
-    tmpOutErr.clearOut();
-    tmpOutErr.clearErr();
 
     // Ensure that we are the only ones writing to the output files when using the dynamic spawn
     // strategy.
-    action.spawnExecutionContext.lockOutputFiles();
+    action.spawnExecutionContext.lockOutputFiles(
+        result.getExitCode(), result.getMessage(), tmpOutErr);
+    // Will these be properly garbage-collected if the above throws an exception?
+    tmpOutErr.clearOut();
+    tmpOutErr.clearErr();
 
     if (downloadOutputs) {
       moveOutputsToFinalLocation(downloads);
@@ -1134,13 +1165,18 @@ public class RemoteExecutionService {
             .subscribe(
                 new SingleObserver<ActionResult>() {
                   @Override
-                  public void onSubscribe(@NonNull Disposable d) {}
+                  public void onSubscribe(@NonNull Disposable d) {
+                    backgroundTaskPhaser.register();
+                  }
 
                   @Override
-                  public void onSuccess(@NonNull ActionResult actionResult) {}
+                  public void onSuccess(@NonNull ActionResult actionResult) {
+                    backgroundTaskPhaser.arriveAndDeregister();
+                  }
 
                   @Override
                   public void onError(@NonNull Throwable e) {
+                    backgroundTaskPhaser.arriveAndDeregister();
                     reportUploadError(e);
                   }
                 });
@@ -1161,10 +1197,9 @@ public class RemoteExecutionService {
       return;
     }
 
-    String errorMessage =
-        "Writing to Remote Cache: " + grpcAwareErrorMessage(error, verboseFailures);
+    String errorMessage = "Remote Cache: " + grpcAwareErrorMessage(error, verboseFailures);
 
-    reporter.handle(Event.warn(errorMessage));
+    report(Event.warn(errorMessage));
   }
 
   /**
@@ -1275,7 +1310,7 @@ public class RemoteExecutionService {
       remoteCache.release();
 
       try {
-        remoteCache.awaitTermination();
+        backgroundTaskPhaser.awaitAdvanceInterruptibly(backgroundTaskPhaser.arrive());
       } catch (InterruptedException e) {
         buildInterrupted.set(true);
         remoteCache.shutdownNow();
@@ -1285,6 +1320,17 @@ public class RemoteExecutionService {
 
     if (remoteExecutor != null) {
       remoteExecutor.close();
+    }
+  }
+
+  void report(Event evt) {
+
+    synchronized (this) {
+      if (reportedErrors.contains(evt.getMessage())) {
+        return;
+      }
+      reportedErrors.add(evt.getMessage());
+      reporter.handle(evt);
     }
   }
 }

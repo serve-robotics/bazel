@@ -113,7 +113,7 @@ final class Parser {
           .put(TokenKind.PIPE_EQUALS, TokenKind.PIPE)
           .put(TokenKind.GREATER_GREATER_EQUALS, TokenKind.GREATER_GREATER)
           .put(TokenKind.LESS_LESS_EQUALS, TokenKind.LESS_LESS)
-          .build();
+          .buildOrThrow();
 
   /**
    * Highest precedence goes last. Based on:
@@ -970,7 +970,7 @@ final class Parser {
     return new LambdaExpression(locs, lambdaOffset, params, body);
   }
 
-  // parseTestNoCond parses a a single-component expression without
+  // parseTestNoCond parses a single-component expression without
   // consuming a trailing 'if expr else expr'.
   private Expression parseTestNoCond() {
     if (token.kind == TokenKind.LAMBDA) {

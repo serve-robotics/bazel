@@ -58,7 +58,7 @@ public class PlatformLookupUtilTest extends ToolchainTestCase {
       return ImmutableMap.<SkyFunctionName, SkyFunction>builder()
           .putAll(super.getSkyFunctions(directories))
           .put(GET_PLATFORM_INFO_FUNCTION, new GetPlatformInfoFunction())
-          .build();
+          .buildOrThrow();
     }
   }
 
@@ -196,12 +196,6 @@ public class PlatformLookupUtilTest extends ToolchainTestCase {
       } catch (InvalidPlatformException e) {
         throw new GetPlatformInfoFunctionException(e);
       }
-    }
-
-    @Nullable
-    @Override
-    public String extractTag(SkyKey skyKey) {
-      return null;
     }
   }
 

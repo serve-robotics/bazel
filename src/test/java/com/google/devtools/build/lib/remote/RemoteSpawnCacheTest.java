@@ -14,6 +14,7 @@
 package com.google.devtools.build.lib.remote;
 
 import static com.google.common.truth.Truth.assertThat;
+import static com.google.common.util.concurrent.Futures.immediateVoidFuture;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -34,6 +35,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.eventbus.EventBus;
+import com.google.common.util.concurrent.ListenableFuture;
 import com.google.devtools.build.lib.actions.ActionContext;
 import com.google.devtools.build.lib.actions.ActionInput;
 import com.google.devtools.build.lib.actions.ActionInputHelper;
@@ -79,6 +81,7 @@ import com.google.devtools.build.lib.vfs.DigestHashFunction;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.build.lib.vfs.SyscallCache;
 import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
 import com.google.devtools.common.options.Options;
 import java.io.IOException;
@@ -126,10 +129,12 @@ public class RemoteSpawnCacheTest {
         }
 
         @Override
-        public void prefetchInputs() {}
+        public ListenableFuture<Void> prefetchInputs() {
+          return immediateVoidFuture();
+        }
 
         @Override
-        public void lockOutputFiles() {}
+        public void lockOutputFiles(int exitCode, String errorMessage, FileOutErr outErr) {}
 
         @Override
         public boolean speculating() {
@@ -226,14 +231,14 @@ public class RemoteSpawnCacheTest {
                 null,
                 ImmutableSet.of(),
                 /* captureCorruptedOutputsDir= */ null));
-    return new RemoteSpawnCache(execRoot, options, /* verboseFailures=*/ true, reporter, service);
+    return new RemoteSpawnCache(execRoot, options, /* verboseFailures=*/ true, service);
   }
 
   @Before
   public final void setUp() throws Exception {
     MockitoAnnotations.initMocks(this);
     fs = new InMemoryFileSystem(new JavaClock(), DigestHashFunction.SHA256);
-    digestUtil = new DigestUtil(DigestHashFunction.SHA256);
+    digestUtil = new DigestUtil(SyscallCache.NO_CACHE, DigestHashFunction.SHA256);
     execRoot = fs.getPath("/exec/root");
     execRoot.createDirectoryAndParents();
     fakeFileCache = new FakeActionInputFileCache(execRoot);

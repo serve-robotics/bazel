@@ -140,7 +140,7 @@ public final class RuleContext extends TargetContext
         Builder contextBuilder, ConfiguredTargetAndData prerequisite, Attribute attribute);
   }
 
-  private static final String HOST_CONFIGURATION_PROGRESS_TAG = "for host";
+  private static final String TOOL_CONFIGURATION_PROGRESS_TAG = "for tool";
 
   private final Rule rule;
   /**
@@ -542,7 +542,7 @@ public final class RuleContext extends TargetContext
         rule.getTargetKind(),
         configuration.checksum(),
         configuration.toBuildEvent(),
-        configuration.isHostConfiguration() ? HOST_CONFIGURATION_PROGRESS_TAG : null,
+        configuration.isToolConfiguration() ? TOOL_CONFIGURATION_PROGRESS_TAG : null,
         execProperties,
         executionPlatform);
   }
@@ -845,7 +845,7 @@ public final class RuleContext extends TargetContext
       result.put(entry.getKey(), Preconditions.checkNotNull(labelToDep.get(entry.getValue())));
     }
 
-    return result.build();
+    return result.buildOrThrow();
   }
 
   /**
@@ -1141,15 +1141,16 @@ public final class RuleContext extends TargetContext
   }
 
   /**
-   * Initializes the StarlarkRuleContext for use and returns it.
+   * Initializes the StarlarkRuleContext for use and returns it. No-op if already initialized.
    *
    * <p>Throws RuleErrorException on failure.
    */
   public StarlarkRuleContext initStarlarkRuleContext() throws RuleErrorException {
-    Preconditions.checkState(starlarkRuleContext == null);
-    AspectDescriptor descriptor =
-        aspects.isEmpty() ? null : Iterables.getLast(aspects).getDescriptor();
-    this.starlarkRuleContext = new StarlarkRuleContext(this, descriptor);
+    if (starlarkRuleContext == null) {
+      AspectDescriptor descriptor =
+          aspects.isEmpty() ? null : Iterables.getLast(aspects).getDescriptor();
+      this.starlarkRuleContext = new StarlarkRuleContext(this, descriptor);
+    }
     return starlarkRuleContext;
   }
 
@@ -1678,7 +1679,7 @@ public final class RuleContext extends TargetContext
       Preconditions.checkNotNull(visibility);
       AttributeMap attributes =
           ConfiguredAttributeMapper.of(
-              target.getAssociatedRule(), configConditions.asProviders(), configuration.checksum());
+              target.getAssociatedRule(), configConditions.asProviders(), configuration);
       checkAttributesNonEmpty(attributes);
       ListMultimap<String, ConfiguredTargetAndData> targetMap = createTargetMap();
       // This conditionally checks visibility on config_setting rules based on

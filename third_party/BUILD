@@ -9,7 +9,6 @@ filegroup(
         "//third_party/allocation_instrumenter:srcs",
         "//third_party/animal_sniffer:srcs",
         "//third_party/antlr:srcs",
-        "//third_party/aws-sdk-auth-lite:srcs",
         "//third_party/bazel-toolchains:srcs",
         "//third_party/checker_framework_dataflow:srcs",
         "//third_party/checker_framework_javacutil:srcs",
@@ -143,12 +142,6 @@ distrib_java_import(
 )
 
 distrib_java_import(
-    name = "apache_commons_logging",
-    enable_distributions = ["debian"],
-    jars = ["apache_commons_logging/commons-logging-1.1.1.jar"],
-)
-
-distrib_java_import(
     name = "apache_commons_pool2",
     enable_distributions = ["debian"],
     jars = ["apache_commons_pool2/commons-pool2-2.8.0.jar"],
@@ -223,7 +216,6 @@ distrib_java_import(
     runtime_deps = [
         ":api_client",
         ":guava",
-        "//third_party/aws-sdk-auth-lite",
     ],
 )
 
@@ -372,15 +364,15 @@ distrib_java_import(
     name = "error_prone_annotations",
     enable_distributions = ["debian"],
     jars = [
-        "error_prone/error_prone_annotations-2.9.0.jar",
-        "error_prone/error_prone_type_annotations-2.9.0.jar",
+        "error_prone/error_prone_annotations-2.11.0.jar",
+        "error_prone/error_prone_type_annotations-2.11.0.jar",
     ],
 )
 
 distrib_jar_filegroup(
     name = "error_prone_annotations-jar",
     srcs = [
-        "error_prone/error_prone_annotations-2.9.0.jar",
+        "error_prone/error_prone_annotations-2.11.0.jar",
         "error_prone/threeten-extra-1.5.0.jar",
     ],
     enable_distributions = ["debian"],
@@ -389,9 +381,9 @@ distrib_jar_filegroup(
 java_import(
     name = "error_prone",
     jars = [
-        "error_prone/error_prone_annotation-2.9.0.jar",
-        "error_prone/error_prone_check_api-2.9.0.jar",
-        "error_prone/error_prone_core-2.9.0.jar",
+        "error_prone/error_prone_annotation-2.11.0.jar",
+        "error_prone/error_prone_check_api-2.11.0.jar",
+        "error_prone/error_prone_core-2.11.0.jar",
     ],
     exports = [
         ":error_prone_annotations",
@@ -458,7 +450,7 @@ distrib_java_import(
     enable_distributions = ["debian"],
     jars = [
         "guava/failureaccess-1.0.1.jar",
-        "guava/guava-30.1.1-jre.jar",
+        "guava/guava-31.0.1-jre.jar",
     ],
     exports = [
         ":error_prone_annotations",
@@ -507,7 +499,7 @@ distrib_java_import(
 # For bootstrapping JavaBuilder
 distrib_jar_filegroup(
     name = "guava-jars",
-    srcs = ["guava/guava-30.1.1-jre.jar"],
+    srcs = ["guava/guava-31.0.1-jre.jar"],
     enable_distributions = ["debian"],
 )
 
@@ -668,7 +660,7 @@ java_import(
 
 java_import(
     name = "guava-testlib",
-    jars = ["guava/guava-testlib-30.1.1-jre.jar"],
+    jars = ["guava/guava-testlib-31.0.1-jre.jar"],
 )
 
 distrib_java_import(

@@ -15,7 +15,6 @@ package com.google.devtools.build.lib.skyframe.packages;
 
 import static com.google.common.base.Preconditions.checkState;
 
-import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
@@ -25,7 +24,6 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.eventbus.EventBus;
 import com.google.common.hash.HashFunction;
-import com.google.devtools.build.lib.actions.FileStateValue;
 import com.google.devtools.build.lib.actions.FileValue;
 import com.google.devtools.build.lib.actions.ThreadStateReceiver;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
@@ -72,7 +70,6 @@ import com.google.devtools.build.lib.skyframe.ManagedDirectoriesKnowledge;
 import com.google.devtools.build.lib.skyframe.PackageFunction;
 import com.google.devtools.build.lib.skyframe.PackageFunction.ActionOnIOExceptionReadingBuildFile;
 import com.google.devtools.build.lib.skyframe.PackageFunction.IncrementalityIntent;
-import com.google.devtools.build.lib.skyframe.PackageFunction.LoadedPackageCacheEntry;
 import com.google.devtools.build.lib.skyframe.PackageLookupFunction;
 import com.google.devtools.build.lib.skyframe.PackageLookupFunction.CrossRepositoryLabelViolationStrategy;
 import com.google.devtools.build.lib.skyframe.PackageValue;
@@ -85,11 +82,10 @@ import com.google.devtools.build.lib.skyframe.StarlarkBuiltinsFunction;
 import com.google.devtools.build.lib.skyframe.WorkspaceFileFunction;
 import com.google.devtools.build.lib.skyframe.WorkspaceNameFunction;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
+import com.google.devtools.build.lib.vfs.FileStateKey;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
-import com.google.devtools.build.lib.vfs.UnixGlob.FilesystemCalls;
-import com.google.devtools.build.skyframe.BuildDriver;
 import com.google.devtools.build.skyframe.Differencer;
 import com.google.devtools.build.skyframe.ErrorInfo;
 import com.google.devtools.build.skyframe.EvaluationContext;
@@ -100,7 +96,6 @@ import com.google.devtools.build.skyframe.ImmutableDiff;
 import com.google.devtools.build.skyframe.InMemoryMemoizingEvaluator;
 import com.google.devtools.build.skyframe.Injectable;
 import com.google.devtools.build.skyframe.MemoizingEvaluator;
-import com.google.devtools.build.skyframe.SequentialBuildDriver;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionName;
 import com.google.devtools.build.skyframe.SkyKey;
@@ -133,8 +128,7 @@ public abstract class AbstractPackageLoader implements PackageLoader {
   private final Differencer preinjectedDifferencer =
       new Differencer() {
         @Override
-        public Diff getDiff(WalkableGraph fromGraph, Version fromVersion, Version toVersion)
-            throws InterruptedException {
+        public Diff getDiff(WalkableGraph fromGraph, Version fromVersion, Version toVersion) {
           return preinjectedDiff;
         }
       };
@@ -378,7 +372,7 @@ public abstract class AbstractPackageLoader implements PackageLoader {
       StoredEventHandler storedEventHandler)
       throws InterruptedException {
     EvaluationResult<PackageValue> evalResult =
-        makeFreshDriver().evaluate(pkgKeys, evaluationContext);
+        makeFreshEvaluator().evaluate(pkgKeys, evaluationContext);
     ImmutableMap.Builder<PackageIdentifier, PackageLoader.PackageOrException> result =
         ImmutableMap.builder();
     for (SkyKey key : pkgKeys) {
@@ -392,7 +386,7 @@ public abstract class AbstractPackageLoader implements PackageLoader {
               ? new PackageOrException(null, exceptionFromErrorInfo(error, pkgId))
               : new PackageOrException(packageValue.getPackage(), null));
     }
-    return new Result(result.build(), storedEventHandler.getEvents());
+    return new Result(result.buildOrThrow(), storedEventHandler.getEvents());
   }
 
   public ConfiguredRuleClassProvider getRuleClassProvider() {
@@ -417,16 +411,15 @@ public abstract class AbstractPackageLoader implements PackageLoader {
         "Unexpected Exception type from PackageValue for '" + pkgId + "'' with error: " + error, e);
   }
 
-  private BuildDriver makeFreshDriver() {
-    return new SequentialBuildDriver(
-        InMemoryMemoizingEvaluator.SUPPLIER.create(
-            makeFreshSkyFunctions(),
-            preinjectedDifferencer,
-            EvaluationProgressReceiver.NULL,
-            GraphInconsistencyReceiver.THROWING,
-            InMemoryMemoizingEvaluator.DEFAULT_STORED_EVENT_FILTER,
-            new MemoizingEvaluator.EmittedEventState(),
-            /*keepEdges=*/ false));
+  private MemoizingEvaluator makeFreshEvaluator() {
+    return new InMemoryMemoizingEvaluator(
+        makeFreshSkyFunctions(),
+        preinjectedDifferencer,
+        EvaluationProgressReceiver.NULL,
+        GraphInconsistencyReceiver.THROWING,
+        InMemoryMemoizingEvaluator.DEFAULT_STORED_EVENT_FILTER,
+        new MemoizingEvaluator.EmittedEventState(),
+        /*keepEdges=*/ false);
   }
 
   protected abstract ImmutableList<EnvironmentExtension> getEnvironmentExtensions();
@@ -441,16 +434,10 @@ public abstract class AbstractPackageLoader implements PackageLoader {
   protected abstract ActionOnIOExceptionReadingBuildFile getActionOnIOExceptionReadingBuildFile();
 
   private ImmutableMap<SkyFunctionName, SkyFunction> makeFreshSkyFunctions() {
-    AtomicReference<TimestampGranularityMonitor> tsgm =
-        new AtomicReference<>(new TimestampGranularityMonitor(BlazeClock.instance()));
-    Cache<PackageIdentifier, LoadedPackageCacheEntry> packageFunctionCache =
-        Caffeine.newBuilder().build();
-    AtomicReference<FilesystemCalls> syscallCacheRef =
-        new AtomicReference<>(
-            PerBuildSyscallCache.newBuilder()
-                .setInitialCapacity(nonSkyframeGlobbingThreads)
-                .build());
-    pkgFactory.setSyscalls(syscallCacheRef);
+    TimestampGranularityMonitor tsgm = new TimestampGranularityMonitor(BlazeClock.instance());
+    PerBuildSyscallCache syscallCache =
+        PerBuildSyscallCache.newBuilder().setInitialCapacity(nonSkyframeGlobbingThreads).build();
+    pkgFactory.setSyscallCache(syscallCache);
     pkgFactory.setMaxDirectoriesToEagerlyVisitInGlobbing(
         MAX_DIRECTORIES_TO_EAGERLY_VISIT_IN_GLOBBING);
     CachingPackageLocator cachingPackageLocator =
@@ -458,7 +445,7 @@ public abstract class AbstractPackageLoader implements PackageLoader {
           @Override
           @Nullable
           public Path getBuildFileForPackage(PackageIdentifier packageName) {
-            return pkgLocatorRef.get().getPackageBuildFileNullable(packageName, syscallCacheRef);
+            return pkgLocatorRef.get().getPackageBuildFileNullable(packageName, syscallCache);
           }
 
           @Override
@@ -471,8 +458,8 @@ public abstract class AbstractPackageLoader implements PackageLoader {
     builder
         .put(SkyFunctions.PRECOMPUTED, new PrecomputedFunction())
         .put(
-            FileStateValue.FILE_STATE,
-            new FileStateFunction(tsgm, syscallCacheRef, externalFilesHelper))
+            FileStateKey.FILE_STATE,
+            new FileStateFunction(() -> tsgm, syscallCache, externalFilesHelper))
         .put(FileSymlinkCycleUniquenessFunction.NAME, new FileSymlinkCycleUniquenessFunction())
         .put(
             FileSymlinkInfiniteExpansionUniquenessFunction.NAME,
@@ -513,9 +500,7 @@ public abstract class AbstractPackageLoader implements PackageLoader {
                 pkgFactory,
                 cachingPackageLocator,
                 /*showLoadingProgress=*/ new AtomicBoolean(false),
-                packageFunctionCache,
-                /*compiledBuildFileCache=*/ Caffeine.newBuilder().build(),
-                /*numPackagesLoaded=*/ new AtomicInteger(0),
+                /*numPackagesSuccessfullyLoaded=*/ new AtomicInteger(0),
                 /*bzlLoadFunctionForInlining=*/ null,
                 /*packageProgress=*/ null,
                 getActionOnIOExceptionReadingBuildFile(),
@@ -523,6 +508,6 @@ public abstract class AbstractPackageLoader implements PackageLoader {
                 IncrementalityIntent.NON_INCREMENTAL,
                 k -> ThreadStateReceiver.NULL_INSTANCE))
         .putAll(extraSkyFunctions);
-    return builder.build();
+    return builder.buildOrThrow();
   }
 }

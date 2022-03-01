@@ -53,6 +53,7 @@ java_library(
             "LocalHostResourceManagerDarwin.java",
             "LocalHostResourceFallback.java",
             "MiddlemanType.java",
+            "ResourceManager.java",
             "ResourceSet.java",
             "ResourceSetOrBuilder.java",
             "PackageRootResolver.java",
@@ -97,7 +98,6 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec:serialization-constant",
         "//src/main/java/com/google/devtools/build/lib/starlarkbuildapi",
-        "//src/main/java/com/google/devtools/build/lib/unix:procmeminfo_parser",
         "//src/main/java/com/google/devtools/build/lib/unsafe:string",
         "//src/main/java/com/google/devtools/build/lib/util",
         "//src/main/java/com/google/devtools/build/lib/util:command",
@@ -248,7 +248,6 @@ java_library(
     srcs = ["FilesetOutputSymlink.java"],
     deps = [
         ":has_digest",
-        "//src/main/java/com/google/devtools/build/lib/util",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
         "//third_party:auto_value",
         "//third_party:guava",
@@ -271,6 +270,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/concurrent",
         "//src/main/java/com/google/devtools/build/lib/io:inconsistent_filesystem_exception",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
+        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec:serialization-constant",
         "//src/main/java/com/google/devtools/build/lib/util",
         "//src/main/java/com/google/devtools/build/lib/util:var_int",
         "//src/main/java/com/google/devtools/build/lib/util/io",
@@ -299,8 +299,7 @@ java_library(
         "ResourceSetOrBuilder.java",
     ],
     deps = [
-        ":artifacts",
-        "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
+        ":exec_exception",
         "//src/main/java/com/google/devtools/build/lib/concurrent",
         "//src/main/java/com/google/devtools/build/lib/jni",
         "//src/main/java/com/google/devtools/build/lib/unix",
@@ -342,6 +341,33 @@ java_library(
     srcs = ["ThreadStateReceiver.java"],
     deps = [
         "//src/main/java/com/google/devtools/build/lib/profiler",
-        "//third_party:jsr305",
+        "//third_party:error_prone_annotations",
+    ],
+)
+
+java_library(
+    name = "exec_exception",
+    srcs = [
+        "ExecException.java",
+        "UserExecException.java",
+    ],
+    deps = ["//src/main/protobuf:failure_details_java_proto"],
+)
+
+java_library(
+    name = "resource_manager",
+    srcs = [
+        "ResourceManager.java",
+    ],
+    deps = [
+        ":actions",
+        ":localhost_capacity",
+        "//src/main/java/com/google/devtools/build/lib/concurrent",
+        "//src/main/java/com/google/devtools/build/lib/profiler",
+        "//src/main/java/com/google/devtools/build/lib/unix:procmeminfo_parser",
+        "//src/main/java/com/google/devtools/build/lib/util",
+        "//src/main/java/com/google/devtools/build/lib/util:os",
+        "//src/main/java/com/google/devtools/build/lib/worker",
+        "//third_party:guava",
     ],
 )

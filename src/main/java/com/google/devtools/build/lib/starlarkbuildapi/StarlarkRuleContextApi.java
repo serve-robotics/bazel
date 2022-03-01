@@ -18,6 +18,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.docgen.annot.DocCategory;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.Depset;
+import com.google.devtools.build.lib.collect.nestedset.Depset.TypeException;
 import com.google.devtools.build.lib.starlarkbuildapi.core.ProviderApi;
 import com.google.devtools.build.lib.starlarkbuildapi.core.StructApi;
 import com.google.devtools.build.lib.starlarkbuildapi.core.TransitiveInfoCollectionApi;
@@ -460,19 +461,21 @@ public interface StarlarkRuleContextApi<ConstraintValueT extends ConstraintValue
   @StarlarkMethod(
       name = "info_file",
       structField = true,
-      documented = false,
+      documented = true,
       doc =
           "Returns the file that is used to hold the non-volatile workspace status for the "
-              + "current build request.")
+              + "current build request. See documentation for --workspace_status_command "
+              + "for more information.")
   FileApi getStableWorkspaceStatus() throws InterruptedException, EvalException;
 
   @StarlarkMethod(
       name = "version_file",
       structField = true,
-      documented = false,
+      documented = true,
       doc =
           "Returns the file that is used to hold the volatile workspace status for the "
-              + "current build request.")
+              + "current build request. See documentation for --workspace_status_command "
+              + "for more information.")
   FileApi getVolatileWorkspaceStatus() throws InterruptedException, EvalException;
 
   @StarlarkMethod(
@@ -564,27 +567,36 @@ public interface StarlarkRuleContextApi<ConstraintValueT extends ConstraintValue
             name = "symlinks",
             defaultValue = "{}",
             named = true,
+            allowedTypes = {
+              @ParamType(type = Dict.class),
+              @ParamType(type = Depset.class, generic1 = SymlinkEntryApi.class)
+            },
             doc =
-                "The map of symlinks to be added to the runfiles, prefixed by workspace name. See "
+                "Either a SymlinkEntry depset or the map of symlinks, prefixed by workspace name, "
+                    + "to be added to the runfiles. See "
                     + "<a href=\"../rules.$DOC_EXT#runfiles-symlinks\">Runfiles symlinks</a> in "
                     + "the rules guide."),
         @Param(
             name = "root_symlinks",
             defaultValue = "{}",
             named = true,
+            allowedTypes = {
+              @ParamType(type = Dict.class),
+              @ParamType(type = Depset.class, generic1 = SymlinkEntryApi.class)
+            },
             doc =
-                "The map of symlinks to be added to the runfiles. See "
-                    + "<a href=\"../rules.$DOC_EXT#runfiles-symlinks\">Runfiles symlinks</a> in "
-                    + "the rules guide.")
+                "Either a SymlinkEntry depset or a map of symlinks to be added to the runfiles. "
+                    + "See <a href=\"../rules.$DOC_EXT#runfiles-symlinks\">Runfiles symlinks</a> "
+                    + "in the rules guide.")
       })
   RunfilesApi runfiles(
       Sequence<?> files,
       Object transitiveFiles,
       Boolean collectData,
       Boolean collectDefault,
-      Dict<?, ?> symlinks,
-      Dict<?, ?> rootSymlinks)
-      throws EvalException;
+      Object symlinks,
+      Object rootSymlinks)
+      throws EvalException, TypeException;
 
   @StarlarkMethod(
       name = "resolve_command",

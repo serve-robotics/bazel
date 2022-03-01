@@ -17,6 +17,7 @@ import static com.google.common.truth.Truth.assertThat;
 import static com.google.devtools.build.lib.packages.Attribute.attr;
 import static com.google.devtools.build.lib.packages.BuildType.LABEL;
 import static com.google.devtools.build.lib.testutil.TestConstants.PLATFORM_LABEL;
+import static org.junit.Assert.assertThrows;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
@@ -25,10 +26,12 @@ import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.BuildOptionsView;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
+import com.google.devtools.build.lib.analysis.config.ToolchainTypeRequirement;
 import com.google.devtools.build.lib.analysis.config.transitions.PatchTransition;
 import com.google.devtools.build.lib.analysis.util.DummyTestFragment.DummyTestOptions;
 import com.google.devtools.build.lib.analysis.util.MockRule;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.TargetParsingException;
 import com.google.devtools.build.lib.events.EventHandler;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.AttributeMap;
@@ -36,11 +39,14 @@ import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.query2.PostAnalysisQueryEnvironment;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.QueryFunction;
 import com.google.devtools.build.lib.query2.engine.QueryEnvironment.Setting;
+import com.google.devtools.build.lib.query2.engine.QueryException;
 import com.google.devtools.build.lib.query2.engine.QueryExpression;
 import com.google.devtools.build.lib.query2.engine.QueryParser;
+import com.google.devtools.build.lib.server.FailureDetails;
 import com.google.devtools.build.lib.server.FailureDetails.ConfigurableQuery.Code;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.testutil.TestConstants;
+import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.lib.util.FileTypeSet;
 import java.util.Collections;
 import java.util.HashMap;
@@ -152,15 +158,19 @@ public abstract class PostAnalysisQueryTest<T> extends AbstractQueryTest<T> {
   @Test
   public void testTargetLiteralWithMissingTargets() throws Exception {
     getHelper().turnOffFailFast();
-    super.testTargetLiteralWithMissingTargets();
+    TargetParsingException e =
+        assertThrows(TargetParsingException.class, super::testTargetLiteralWithMissingTargets);
+    checkResultOfTargetLiteralWithMissingTargets(
+        e.getMessage(), e.getDetailedExitCode().getFailureDetail());
   }
 
   @Override
   @Test
   public void testBadTargetLiterals() throws Exception {
     getHelper().turnOffFailFast();
-    // Post-analysis query test infrastructure clobbers certain detailed failures.
-    runBadTargetLiteralsTest(/*checkDetailedCode=*/ false);
+    TargetParsingException e =
+        assertThrows(TargetParsingException.class, super::testBadTargetLiterals);
+    checkResultofBadTargetLiterals(e.getMessage(), e.getDetailedExitCode().getFailureDetail());
   }
 
   @SuppressWarnings("TruthIncompatibleType")
@@ -216,8 +226,9 @@ public abstract class PostAnalysisQueryTest<T> extends AbstractQueryTest<T> {
             MockRule.define(
                 "implicit_toolchain_deps_rule",
                 (builder, env) ->
-                    builder.addRequiredToolchains(
-                        Label.parseAbsoluteUnchecked("//test:toolchain_type")));
+                    builder.addToolchainTypes(
+                        ToolchainTypeRequirement.create(
+                            Label.parseAbsoluteUnchecked("//test:toolchain_type"))));
     helper.useRuleClassProvider(setRuleClassProviders(ruleWithImplicitDeps).build());
 
     writeFile(
@@ -525,6 +536,28 @@ public abstract class PostAnalysisQueryTest<T> extends AbstractQueryTest<T> {
         .isNotEqualTo(getConfiguration(Iterables.getOnlyElement(eval("//test:top-level"))));
   }
 
+  @Test
+  public void inconsistentSkyQueryIncremental() throws Exception {
+    getHelper().setSyscallCache(TestUtils.makeDisappearingFileCache("bar/BUILD"));
+    getHelper().turnOffFailFast();
+    writeFile("foo/BUILD");
+    writeFile("bar/BUILD");
+    getHelper().setUniverseScope("//bar/...");
+    TargetParsingException targetParsingException =
+        assertThrows(TargetParsingException.class, () -> eval("set()"));
+    assertThat(
+            targetParsingException
+                .getDetailedExitCode()
+                .getFailureDetail()
+                .getPackageLoading()
+                .getCode())
+        .isEqualTo(FailureDetails.PackageLoading.Code.TRANSIENT_INCONSISTENT_FILESYSTEM_ERROR);
+    getHelper().setUniverseScope("//foo/...");
+    QueryException queryException = assertThrows(QueryException.class, () -> eval("bar"));
+    assertThat(queryException.getFailureDetail().getTargetPatterns().getCode())
+        .isEqualTo(FailureDetails.TargetPatterns.Code.CANNOT_DETERMINE_TARGET_FROM_FILENAME);
+  }
+
   private void writeSimpleTarget() throws Exception {
     MockRule simpleRule =
         () ->
@@ -612,6 +645,12 @@ public abstract class PostAnalysisQueryTest<T> extends AbstractQueryTest<T> {
 
   @Override
   public void testRegression1309697() {}
+
+  @Override
+  public void badRuleInDeps() {}
+
+  @Override
+  public void boundedRdepsWithError() {}
 
   // Can't handle cycles.
   @Override
@@ -773,6 +812,10 @@ public abstract class PostAnalysisQueryTest<T> extends AbstractQueryTest<T> {
   @Override
   @Test
   public void testWildcardsDontLoadUnnecessaryPackages() {}
+
+  @Override
+  @Test
+  public void boundedDepsWithError() {}
 
   // Query needs a graph.
   @Override

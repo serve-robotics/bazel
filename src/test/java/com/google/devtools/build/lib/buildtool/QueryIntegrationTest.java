@@ -16,10 +16,14 @@ package com.google.devtools.build.lib.buildtool;
 import static com.google.common.truth.Truth.assertThat;
 import static com.google.common.truth.Truth.assertWithMessage;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.junit.Assert.fail;
 
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
-import com.google.devtools.build.lib.analysis.util.AnalysisMock;
+import com.google.common.collect.Maps;
+import com.google.devtools.build.lib.actions.FileValue;
+import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.buildtool.util.BuildIntegrationTestCase;
 import com.google.devtools.build.lib.events.EventKind;
 import com.google.devtools.build.lib.events.util.EventCollectionApparatus;
@@ -28,20 +32,33 @@ import com.google.devtools.build.lib.query2.proto.proto2api.Build.QueryResult;
 import com.google.devtools.build.lib.query2.query.output.QueryOptions;
 import com.google.devtools.build.lib.runtime.BlazeCommandResult;
 import com.google.devtools.build.lib.runtime.BlazeModule;
+import com.google.devtools.build.lib.runtime.BlazeRuntime;
 import com.google.devtools.build.lib.runtime.CommandEnvironment;
 import com.google.devtools.build.lib.runtime.GotOptionsEvent;
+import com.google.devtools.build.lib.runtime.WorkspaceBuilder;
 import com.google.devtools.build.lib.runtime.commands.QueryCommand;
 import com.google.devtools.build.lib.runtime.proto.InvocationPolicyOuterClass.InvocationPolicy;
+import com.google.devtools.build.lib.server.FailureDetails;
+import com.google.devtools.build.lib.skyframe.PerBuildSyscallCache;
+import com.google.devtools.build.lib.skyframe.SkyFunctions;
 import com.google.devtools.build.lib.testutil.TestConstants;
+import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.lib.unix.UnixFileSystem;
 import com.google.devtools.build.lib.util.ExitCode;
 import com.google.devtools.build.lib.vfs.DigestHashFunction;
+import com.google.devtools.build.lib.vfs.FileStateKey;
 import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.FileSystem;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.build.lib.vfs.RootedPath;
+import com.google.devtools.build.lib.vfs.SyscallCache;
+import com.google.devtools.build.skyframe.NotifyingHelper;
+import com.google.devtools.build.skyframe.TrackingAwaiter;
 import com.google.devtools.common.options.OptionsParsingResult;
 import com.google.protobuf.ExtensionRegistry;
+import com.google.testing.junit.testparameterinjector.TestParameter;
+import com.google.testing.junit.testparameterinjector.TestParameterInjector;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -52,6 +69,8 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.annotation.Nullable;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.xpath.XPathConstants;
@@ -60,23 +79,30 @@ import javax.xml.xpath.XPathFactory;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
-/**
- * Integration tests for 'blaze query'.
- */
-@RunWith(JUnit4.class)
+/** Integration tests for 'blaze query'. */
+@RunWith(TestParameterInjector.class)
 public class QueryIntegrationTest extends BuildIntegrationTestCase {
   private final CustomFileSystem fs = new CustomFileSystem();
+  private final SyscallCache perCommandSyscallCache = PerBuildSyscallCache.newBuilder().build();
+
   private final List<String> options = new ArrayList<>();
 
-  @Before
-  public void stageEmbeddedTools() throws Exception {
-    AnalysisMock.get().setupMockToolsRepository(mockToolsConfig);
+  @Override
+  protected BlazeRuntime.Builder getRuntimeBuilder() throws Exception {
+    return super.getRuntimeBuilder()
+        .addBlazeModule(
+            new BlazeModule() {
+              @Override
+              public void workspaceInit(
+                  BlazeRuntime runtime, BlazeDirectories directories, WorkspaceBuilder builder) {
+                builder.setPerCommandSyscallCache(perCommandSyscallCache);
+              }
+            });
   }
 
   @Override
@@ -89,6 +115,7 @@ public class QueryIntegrationTest extends BuildIntegrationTestCase {
 
   private static class CustomFileSystem extends UnixFileSystem {
     final Map<PathFragment, FileStatus> stubbedStats = new HashMap<>();
+    final Map<PathFragment, Runnable> watchedPaths = Maps.newConcurrentMap();
 
     CustomFileSystem() {
       super(DigestHashFunction.SHA256, "");
@@ -100,6 +127,10 @@ public class QueryIntegrationTest extends BuildIntegrationTestCase {
 
     @Override
     public FileStatus statIfFound(PathFragment path, boolean followSymlinks) throws IOException {
+      Runnable runnable = watchedPaths.get(path);
+      if (runnable != null) {
+        runnable.run();
+      }
       if (stubbedStats.containsKey(path)) {
         return stubbedStats.get(path);
       }
@@ -279,7 +310,8 @@ public class QueryIntegrationTest extends BuildIntegrationTestCase {
 
   @Test
   public void testInputFileElementContainsPackageGroups() throws Exception {
-    write("fruit/BUILD",
+    write(
+        "fruit/BUILD",
         "package_group(name='coconut', packages=['//fruit/walnut'])",
         "exports_files(['chestnut'], visibility=[':coconut'])");
 
@@ -294,7 +326,8 @@ public class QueryIntegrationTest extends BuildIntegrationTestCase {
 
   @Test
   public void testNonStrictTests() throws Exception {
-    write("donut/BUILD",
+    write(
+        "donut/BUILD",
         "sh_binary(name = 'thief', srcs = ['thief.sh'])",
         "cc_test(name = 'shop', srcs = ['shop.cc'])",
         "test_suite(name = 'cop', tests = [':thief', ':shop'])");
@@ -309,7 +342,8 @@ public class QueryIntegrationTest extends BuildIntegrationTestCase {
   @Test
   public void testStrictTests() throws Exception {
     options.add("--strict_test_suite=true");
-    write("donut/BUILD",
+    write(
+        "donut/BUILD",
         "sh_binary(name = 'thief', srcs = ['thief.sh'])",
         "test_suite(name = 'cop', tests = [':thief'])");
 
@@ -376,9 +410,7 @@ public class QueryIntegrationTest extends BuildIntegrationTestCase {
       options.add("--keep_going");
     }
     QueryOutput result = getQueryResult("deps(//bar:baz)");
-    ExitCode expectedExitcode =
-        keepGoing ? ExitCode.PARTIAL_ANALYSIS_FAILURE : ExitCode.ANALYSIS_FAILURE;
-    assertExitCode(result, expectedExitcode);
+    assertExitCode(result, ExitCode.ANALYSIS_FAILURE);
     events.assertContainsError("Inconsistent filesystem operations");
     assertThat(events.errors()).hasSize(1);
   }
@@ -393,7 +425,8 @@ public class QueryIntegrationTest extends BuildIntegrationTestCase {
     runInconsistentFileSystem(/*keepGoing=*/ false);
   }
 
-  private void runDepInconsistentFileSystem(boolean keepGoing) throws Exception {
+  @Test
+  public void depInconsistentFileSystem(@TestParameter boolean keepGoing) throws Exception {
     write("foo/BUILD", "sh_library(name = 'foo', deps = ['//bar:baz'])");
     createBadBarBuild();
     if (keepGoing) {
@@ -405,21 +438,16 @@ public class QueryIntegrationTest extends BuildIntegrationTestCase {
     assertExitCode(result, expectedExitcode);
     events.assertContainsError("Inconsistent filesystem operations");
     events.assertContainsError("and referenced by '//foo:foo'");
-    events.assertContainsError("Evaluation of query \"deps(//foo:foo)\" failed: errors were ");
+    if (keepGoing) {
+      events.assertContainsError("Evaluation of query \"deps(//foo:foo)\" failed: errors were ");
+    } else {
+      events.assertContainsError(
+          "Evaluation of query \"deps(//foo:foo)\" failed: preloading transitive closure failed: ");
+    }
     // TODO(janakr): We emit duplicate events: in the ErrorPrintingTargetEdgeErrorObserver and in
     //  TransitiveTargetFunction. Should be able to remove one of them, most likely
     //  TransitiveTargetFunction.
-    assertThat(events.errors()).hasSize(3);
-  }
-
-  @Test
-  public void depInconsistentFileSystemKeepGoing() throws Exception {
-    runDepInconsistentFileSystem(/*keepGoing=*/ true);
-  }
-
-  @Test
-  public void depInconsistentFileSystemNoKeepGoing() throws Exception {
-    runDepInconsistentFileSystem(/*keepGoing=*/ false);
+    assertThat(events.errors()).hasSize(keepGoing ? 3 : 2);
   }
 
   @Test
@@ -608,7 +636,7 @@ public class QueryIntegrationTest extends BuildIntegrationTestCase {
     write(
         "package/inc.bzl",
         "def g(name):",
-        "    native.cc_library(name = name)",
+        "    native.sh_library(name = name)",
         "",
         "def f(name):",
         "    g(name)");
@@ -622,7 +650,7 @@ public class QueryIntegrationTest extends BuildIntegrationTestCase {
         "# "
             + workspaceDir
             + "/package/BUILD:2:2\n"
-            + "cc_library(\n"
+            + "sh_library(\n"
             + "  name = \"a\",\n"
             + "  generator_name = \"a\",\n"
             + "  generator_function = \"f\",\n"
@@ -643,7 +671,7 @@ public class QueryIntegrationTest extends BuildIntegrationTestCase {
             + "# "
             + workspaceDir
             + "/package/BUILD:3:2\n"
-            + "cc_library(\n"
+            + "sh_library(\n"
             + "  name = \"b\",\n"
             + "  generator_name = \"b\",\n"
             + "  generator_function = \"f\",\n"
@@ -665,7 +693,8 @@ public class QueryIntegrationTest extends BuildIntegrationTestCase {
     assertThat(out).isEqualTo(expectedOut);
   }
 
-  private void assertDepthBoundedQuery(boolean orderResults) throws Exception {
+  @Test
+  public void depthBoundedQuery(@TestParameter boolean orderResults) throws Exception {
     if (orderResults) {
       options.add("--order_output=auto");
     } else {
@@ -773,13 +802,135 @@ public class QueryIntegrationTest extends BuildIntegrationTestCase {
   }
 
   @Test
-  public void depthBoundedQueryUnordered() throws Exception {
-    assertDepthBoundedQuery(false);
+  public void inconsistentSkyQueryIncremental() throws Exception {
+    write("foo/BUILD");
+    PathFragment barFile = PathFragment.create("bar/BUILD");
+    PathFragment bar = barFile.getParentDirectory();
+    Path badFile = write(barFile.getPathString());
+    fs.stubStat(badFile, null);
+    CountDownLatch directoryListingLatch = new CountDownLatch(1);
+    getSkyframeExecutor()
+        .getEvaluator()
+        .injectGraphTransformerForTesting(
+            NotifyingHelper.makeNotifyingTransformer(
+                (key, type, order, context) -> {
+                  if (NotifyingHelper.EventType.IS_READY.equals(type)
+                      && FileStateKey.FILE_STATE.equals(key.functionName())
+                      && barFile.equals(((RootedPath) key.argument()).getRootRelativePath())) {
+                    TrackingAwaiter.INSTANCE.awaitLatchAndTrackExceptions(
+                        directoryListingLatch, "Directory never listed");
+                  } else if (NotifyingHelper.EventType.SET_VALUE.equals(type)
+                      && NotifyingHelper.Order.AFTER.equals(order)
+                      && SkyFunctions.DIRECTORY_LISTING_STATE.equals(key.functionName())
+                      && bar.equals(((RootedPath) key.argument()).getRootRelativePath())) {
+                    directoryListingLatch.countDown();
+                  }
+                }));
+    QueryOutput queryResult =
+        getQueryResult("set()", "--universe_scope=//bar/...", "-k", "--order_output=no");
+    assertThat(
+            queryResult
+                .getBlazeCommandResult()
+                .getDetailedExitCode()
+                .getFailureDetail()
+                .getPackageLoading()
+                .getCode())
+        .isEqualTo(FailureDetails.PackageLoading.Code.TRANSIENT_INCONSISTENT_FILESYSTEM_ERROR);
+    assertThat(directoryListingLatch.await(0, SECONDS)).isTrue();
+    TrackingAwaiter.INSTANCE.assertNoErrors();
   }
 
   @Test
-  public void depthBoundedQueryOrdered() throws Exception {
-    assertDepthBoundedQuery(true);
+  public void skyQueryStatExtensionPackage() throws Exception {
+    write("foo/BUILD", "load('//foo/bar:bar.bzl', 'sym')");
+    write("foo/bar/bar.bzl", "sym = 0");
+    Path barBuild = write("foo/bar/BUILD");
+    AtomicInteger barBuildCount = new AtomicInteger(0);
+    fs.watchedPaths.put(barBuild.asFragment(), barBuildCount::incrementAndGet);
+    QueryOutput queryResult =
+        getQueryResult("buildfiles(//foo:*)", "--universe_scope=//foo/...", "--order_output=no");
+    assertQueryOutputContains(queryResult, "//foo:BUILD", "//foo/bar:BUILD", "//foo/bar:bar.bzl");
+    assertThat(barBuildCount.get()).isEqualTo(1);
+  }
+
+  @Test
+  public void skyQueryExtensionPackageBuildFileDeletedAfterStat() throws Exception {
+    write("foo/BUILD", "load('//foo/bar:bar.bzl', 'sym')");
+    Path barBzl = write("foo/bar/bar.bzl", "sym = 0");
+    Path barBuild = write("foo/bar/BUILD");
+    AtomicInteger barBuildCount = new AtomicInteger(0);
+    fs.watchedPaths.put(barBuild.asFragment(), barBuildCount::incrementAndGet);
+    fs.watchedPaths.put(
+        barBzl.asFragment(),
+        () -> {
+          perCommandSyscallCache.clear();
+          try {
+            barBuild.delete();
+          } catch (IOException e) {
+            throw new IllegalStateException(e);
+          }
+        });
+    QueryOutput queryResult =
+        getQueryResult("buildfiles(//foo:*)", "--universe_scope=//foo/...", "--order_output=no");
+    assertQueryOutputContains(queryResult, "//foo:BUILD", "//foo/bar:BUILD", "//foo/bar:bar.bzl");
+    assertThat(barBuildCount.get()).isEqualTo(1);
+  }
+
+  @Test
+  public void skyQueryExtensionPackageBuildFileNotInUniverseHasError() throws Exception {
+    write("foo/BUILD", "load('//foo/bar:bar.bzl', 'sym')");
+    Path barBzl = write("foo/bar/bar.bzl", "sym = 0");
+    Path barBuild = write("foo/bar/BUILD", "bad syntax won't matter");
+    AtomicInteger barBuildCount = new AtomicInteger(0);
+    fs.watchedPaths.put(barBuild.asFragment(), barBuildCount::incrementAndGet);
+    fs.watchedPaths.put(
+        barBzl.asFragment(),
+        () -> {
+          perCommandSyscallCache.clear();
+          try {
+            barBuild.delete();
+          } catch (IOException e) {
+            throw new IllegalStateException(e);
+          }
+        });
+    QueryOutput queryResult =
+        getQueryResult("buildfiles(//foo:*)", "--universe_scope=//foo:*", "--order_output=no");
+    assertQueryOutputContains(queryResult, "//foo:BUILD", "//foo/bar:BUILD", "//foo/bar:bar.bzl");
+    assertThat(barBuildCount.get()).isEqualTo(1);
+  }
+
+  @Test
+  public void nokeepGoingStopsLoadingPackages() throws Exception {
+    Path fooBuild = write("foo/BUILD", "sh_library(name = 'foo', deps = ['//deppackage'])");
+    write("bar/BUILD", "sh_library(name = 'bar', deps= ['//missing'])");
+    fs.watchedPaths.put(
+        fooBuild.getParentDirectory().getChild("deppackage").asFragment(),
+        () -> fail("deppackage should not have been statted"));
+    PathFragment depPackageBuild = PathFragment.create("deppackage/BUILD");
+    getSkyframeExecutor()
+        .getEvaluator()
+        .injectGraphTransformerForTesting(
+            NotifyingHelper.makeNotifyingTransformer(
+                (key, type, order, context) -> {
+                  if (order == NotifyingHelper.Order.BEFORE
+                      && FileValue.FILE.equals(key.functionName())) {
+                    if (!((RootedPath) key.argument())
+                        .getRootRelativePath()
+                        .endsWith(depPackageBuild)) {
+                      return;
+                    }
+                    try {
+                      Thread.sleep(TestUtils.WAIT_TIMEOUT_MILLISECONDS);
+                      fail("Should have been interrupted");
+                    } catch (InterruptedException e) {
+                      // Expected.
+                      Thread.currentThread().interrupt();
+                    }
+                  }
+                }));
+    QueryOutput queryResult = getQueryResult("deps(//foo:all + //bar:all)", "--nokeep_going");
+    assertExitCode(queryResult, ExitCode.ANALYSIS_FAILURE);
+    events.assertDoesNotContainEvent("deppackage");
   }
 
   private void assertExitCode(QueryOutput result, ExitCode expected) {
@@ -858,7 +1009,8 @@ public class QueryIntegrationTest extends BuildIntegrationTestCase {
   private Document getXmlQueryResult(String queryString) throws Exception {
     options.add("--output=xml");
     byte[] queryResult = getQueryResult(queryString).getStdout();
-    return DocumentBuilderFactory.newInstance().newDocumentBuilder()
+    return DocumentBuilderFactory.newInstance()
+        .newDocumentBuilder()
         .parse(new ByteArrayInputStream(queryResult));
   }
 
@@ -889,7 +1041,7 @@ public class QueryIntegrationTest extends BuildIntegrationTestCase {
   }
 
   Element getResultNode(Document xml, String ruleName) throws Exception {
-    return (Element) Iterables.getOnlyElement(xpathSelect(xml,
-        String.format("/query/*[@name='%s']", ruleName)));
+    return (Element)
+        Iterables.getOnlyElement(xpathSelect(xml, String.format("/query/*[@name='%s']", ruleName)));
   }
 }

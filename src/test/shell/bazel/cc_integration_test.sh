@@ -295,11 +295,10 @@ EOF
   echo 'void cc() {}' > ea/cc.cc
   echo 'void cc1() {}' > ea/cc1.cc
 
-  bazel build --experimental_save_feature_state //ea:cc || fail "expected success"
-  ls bazel-bin/ea/feature_debug/cc/requested_features.txt || "requested_features.txt not created"
-  ls bazel-bin/ea/feature_debug/cc/enabled_features.txt || "enabled_features.txt not created"
+  bazel build --experimental_builtins_injection_override=+cc_library --experimental_save_feature_state //ea:cc || fail "expected success"
+  ls bazel-bin/ea/cc_feature_state.txt || "cc_feature_state.txt not created"
   # This assumes "grep" is supported in any environment bazel is used.
-  grep "test_feature" bazel-bin/ea/feature_debug/cc/requested_features.txt || "test_feature should have been found in  requested_features."
+  grep "test_feature" bazel-bin/ea/cc_feature_state.txt || "test_feature should have been found in feature_state."
 }
 
 # TODO: test include dirs and defines
@@ -505,8 +504,14 @@ EOF
 
 using namespace std;
 
+#ifdef __APPLE__
+#define DYNAMIC_LIB_EXT "dylib"
+#else
+#define DYNAMIC_LIB_EXT "so"
+#endif
+
 int main() {
-  void* handle = dlopen("libf.so", RTLD_LAZY);
+  void* handle = dlopen("libf." DYNAMIC_LIB_EXT, RTLD_LAZY);
 
   typedef string (*f_t)();
 
@@ -738,6 +743,43 @@ EOF
       --output_groups=out
 
   cat "bazel-bin/${package}/aspect_out" | grep "\(ar\|libtool\)" \
+      || fail "args didn't contain the tool path"
+
+  cat "bazel-bin/${package}/aspect_out" | grep "a.*o .*b.*o .*c.*o" \
+      || fail "args didn't contain tree artifact paths"
+}
+
+function test_argv_in_compile_action() {
+  local package="${FUNCNAME[0]}"
+  mkdir -p "${package}"
+
+  cat > "${package}/lib.bzl" <<EOF
+def _actions_test_impl(target, ctx):
+    action = [a for a in target.actions if a.mnemonic == "CppCompile"][0]
+    aspect_out = ctx.actions.declare_file('aspect_out')
+    ctx.actions.run_shell(inputs = action.inputs,
+                          outputs = [aspect_out],
+                          command = "echo \$@ > " + aspect_out.path,
+                          arguments = action.argv)
+    return [OutputGroupInfo(out=[aspect_out])]
+
+actions_test_aspect = aspect(implementation = _actions_test_impl)
+EOF
+
+  touch "${package}/x.cc"
+  cat > "${package}/BUILD" <<EOF
+cc_library(
+  name = "x",
+  srcs = ["x.cc"],
+)
+EOF
+
+  bazel build "${package}:x" \
+      --aspects="//${package}:lib.bzl%actions_test_aspect" \
+      --output_groups=out
+
+  cat "bazel-bin/${package}/aspect_out" | \
+      grep "\(gcc\|clang\|clanc-cl.exe\|cl.exe\)" \
       || fail "args didn't contain the tool path"
 
   cat "bazel-bin/${package}/aspect_out" | grep "a.*o .*b.*o .*c.*o" \
@@ -1380,6 +1422,37 @@ EOF
       --aspects="//${package}:lib.bzl%actions_test_aspect" \
       --output_groups=out || \
       fail "bazel build should've succeeded with --features=compiler_param_file"
+}
+
+function test_include_scanning_smoketest() {
+  # Make sure there are no packages containing tools/cpp/INCLUDE_HINTS to exercise that case in
+  # IncludeHintsFunction.
+  rm -rf BUILD tools
+  mkdir pkg
+  cat > pkg/BUILD <<EOF
+cc_binary(
+  name = 'bin',
+  srcs = ['bin.cc'],
+  deps = [':spurious_dep'],
+)
+
+cc_library(
+  name = 'spurious_dep',
+  hdrs = ['dep.h'],
+)
+EOF
+
+  cat > pkg/bin.cc <<EOF
+#define NASTY "dep.h"
+#include NASTY
+int main() { return 0; }
+EOF
+
+  touch pkg/dep.h
+
+  bazel build --experimental_unsupported_and_brittle_include_scanning --features=cc_include_scanning //pkg:bin &>"$TEST_log" && fail 'include scanning did not (wrongly) remove dependency' || true
+  expect_log "Include scanning enabled. This feature is unsupported."
+  expect_log "fatal error: '\?dep.h'\?"
 }
 
 run_suite "cc_integration_test"

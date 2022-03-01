@@ -32,6 +32,7 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.skyframe.serialization.DeserializationContext;
 import com.google.devtools.build.lib.skyframe.serialization.ObjectCodec;
 import com.google.devtools.build.lib.skyframe.serialization.SerializationContext;
+import com.google.devtools.build.lib.skyframe.serialization.SerializationException;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.SerializationConstant;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.OrderedSetMultimap;
@@ -200,7 +201,8 @@ public final class BuildOptions implements Cloneable {
         fragmentOptionsMap.entrySet()) {
       nativeOptionsBuilder.put(entry.getKey(), entry.getValue().clone());
     }
-    return new BuildOptions(nativeOptionsBuilder.build(), ImmutableMap.copyOf(starlarkOptionsMap));
+    return new BuildOptions(
+        nativeOptionsBuilder.buildOrThrow(), ImmutableMap.copyOf(starlarkOptionsMap));
   }
 
   @Override
@@ -679,12 +681,13 @@ public final class BuildOptions implements Cloneable {
 
     @Override
     public BuildOptions deserialize(DeserializationContext context, CodedInputStream codedIn)
-        throws IOException {
+        throws SerializationException, IOException {
       String checksum = codedIn.readString();
-      return checkNotNull(
-          context.getDependency(OptionsChecksumCache.class).getOptions(checksum),
-          "No options instance for %s",
-          checksum);
+      BuildOptions result = context.getDependency(OptionsChecksumCache.class).getOptions(checksum);
+      if (result == null) {
+        throw new SerializationException("No options instance for " + checksum);
+      }
+      return result;
     }
   }
 

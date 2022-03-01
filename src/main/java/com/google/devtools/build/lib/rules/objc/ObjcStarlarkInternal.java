@@ -18,14 +18,20 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
 import com.google.devtools.build.docgen.annot.DocCategory;
 import com.google.devtools.build.lib.actions.Artifact;
+import com.google.devtools.build.lib.analysis.LocationExpander;
 import com.google.devtools.build.lib.analysis.TemplateVariableInfo;
+import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.starlark.StarlarkRuleContext;
 import com.google.devtools.build.lib.analysis.test.InstrumentedFilesInfo;
 import com.google.devtools.build.lib.packages.NativeInfo;
+import com.google.devtools.build.lib.packages.RuleClass.ConfiguredTargetFactory.RuleErrorException;
 import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.rules.cpp.CcCompilationContext;
+import com.google.devtools.build.lib.rules.cpp.CcToolchainProvider;
 import com.google.devtools.build.lib.shell.ShellUtils;
 import com.google.devtools.build.lib.shell.ShellUtils.TokenizationException;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -113,10 +119,22 @@ public class ObjcStarlarkInternal implements StarlarkValue {
             .getPrerequisite("$cc_toolchain", TemplateVariableInfo.PROVIDER)
             .getVariables();
     ImmutableMap<String, String> starlarkRuleContextMap =
-        ImmutableMap.<String, String>builder().putAll(starlarkRuleContext.var()).build();
+        ImmutableMap.<String, String>builder().putAll(starlarkRuleContext.var()).buildOrThrow();
     List<String> expandedFlags = new ArrayList<>();
     for (String flag : Sequence.cast(flags, String.class, "flags")) {
-      String expandedFlag = expandFlag(flag, toolchainMap, starlarkRuleContextMap);
+
+      String expandedFlag =
+          LocationExpander.withExecPaths(
+                  starlarkRuleContext.getRuleContext(),
+                  StarlarkRuleContext.makeLabelMap(
+                      ImmutableSet.copyOf(
+                          Iterables.concat(
+                              starlarkRuleContext.getRuleContext().getPrerequisites("srcs"),
+                              starlarkRuleContext.getRuleContext().getPrerequisites("non_arc_srcs"),
+                              starlarkRuleContext.getRuleContext().getPrerequisites("hdrs"),
+                              starlarkRuleContext.getRuleContext().getPrerequisites("data")))))
+              .expand(flag);
+      expandedFlag = expandFlag(expandedFlag, toolchainMap, starlarkRuleContextMap);
       try {
         ShellUtils.tokenize(expandedFlags, expandedFlag);
       } catch (TokenizationException e) {
@@ -211,13 +229,25 @@ public class ObjcStarlarkInternal implements StarlarkValue {
       documented = false,
       parameters = {
         @Param(name = "ctx", positional = false, named = true),
+        @Param(name = "cc_toolchain", positional = false, named = true),
+        @Param(name = "config", positional = false, named = true),
         @Param(name = "object_files", positional = false, defaultValue = "[]", named = true),
       })
   public InstrumentedFilesInfo createInstrumentedFilesInfo(
-      StarlarkRuleContext starlarkRuleContext, Sequence<?> objectFiles) throws EvalException {
-    return CompilationSupport.getInstrumentedFilesProvider(
-        starlarkRuleContext.getRuleContext(),
-        Sequence.cast(objectFiles, Artifact.class, "object_files").getImmutableList());
+      StarlarkRuleContext starlarkRuleContext,
+      CcToolchainProvider ccToolchain,
+      BuildConfigurationValue config,
+      Sequence<?> objectFiles)
+      throws EvalException {
+    try {
+      return CompilationSupport.getInstrumentedFilesProvider(
+          starlarkRuleContext.getRuleContext(),
+          ccToolchain,
+          config,
+          Sequence.cast(objectFiles, Artifact.class, "object_files").getImmutableList());
+    } catch (RuleErrorException e) {
+      throw new EvalException(e);
+    }
   }
 
   @StarlarkMethod(

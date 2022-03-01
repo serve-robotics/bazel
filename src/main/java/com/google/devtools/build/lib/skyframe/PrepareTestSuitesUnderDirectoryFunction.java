@@ -17,12 +17,13 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
 import com.google.devtools.build.lib.analysis.BlazeDirectories;
 import com.google.devtools.build.lib.cmdline.PackageIdentifier;
-import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.skyframe.PrepareTestSuitesUnderDirectoryValue.Key;
+import com.google.devtools.build.lib.skyframe.ProcessPackageDirectory.ProcessPackageDirectorySkyFunctionException;
 import com.google.devtools.build.skyframe.SkyFunction;
+import com.google.devtools.build.skyframe.SkyFunction.Environment;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
-import javax.annotation.Nullable;
+import com.google.devtools.build.skyframe.SkyframeIterableResult;
 
 /**
  * {@link SkyFunction} to recursively traverse a directory and ensure {@link
@@ -36,7 +37,8 @@ public class PrepareTestSuitesUnderDirectoryFunction implements SkyFunction {
   }
 
   @Override
-  public SkyValue compute(SkyKey skyKey, Environment env) throws InterruptedException {
+  public SkyValue compute(SkyKey skyKey, Environment env)
+      throws InterruptedException, ProcessPackageDirectorySkyFunctionException {
     Key argument = (Key) skyKey.argument();
     ProcessPackageDirectory processPackageDirectory =
         new ProcessPackageDirectory(directories, PrepareTestSuitesUnderDirectoryValue::key);
@@ -60,16 +62,13 @@ public class PrepareTestSuitesUnderDirectoryFunction implements SkyFunction {
                           argument.getRootedPath().getRootRelativePath()))),
               keysToRequest);
     }
-    env.getValuesOrThrow(keysToRequest, NoSuchPackageException.class);
+    SkyframeIterableResult result = env.getOrderedValuesAndExceptions(keysToRequest);
     if (env.valuesMissing()) {
       return null;
     }
+    if (PrepareDepsOfTargetsUnderDirectoryFunction.checkValuesMissing(keysToRequest, result)) {
+      return null;
+    }
     return PrepareTestSuitesUnderDirectoryValue.INSTANCE;
-  }
-
-  @Nullable
-  @Override
-  public String extractTag(SkyKey skyKey) {
-    return null;
   }
 }

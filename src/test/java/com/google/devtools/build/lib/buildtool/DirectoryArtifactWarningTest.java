@@ -14,7 +14,6 @@
 package com.google.devtools.build.lib.buildtool;
 
 import com.google.devtools.build.lib.buildtool.util.BuildIntegrationTestCase;
-import com.google.devtools.build.lib.packages.util.MockGenruleSupport;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
@@ -27,12 +26,12 @@ public class DirectoryArtifactWarningTest extends BuildIntegrationTestCase {
 
   @Test
   public void testOutputArtifactDirectoryWarning() throws Exception {
-    MockGenruleSupport.setup(mockToolsConfig);
-    write("x/BUILD",
-          "genrule(name = 'x',",
-          "        outs = ['dir'],",
-          "        cmd = '/bin/mkdir $(location dir)',",
-          "        srcs = [])");
+    write(
+        "x/BUILD",
+        "genrule(name = 'x',",
+        "        outs = ['dir'],",
+        "        cmd = 'mkdir $(location dir)',",
+        "        srcs = [])");
 
     buildTarget("//x");
 
@@ -42,12 +41,12 @@ public class DirectoryArtifactWarningTest extends BuildIntegrationTestCase {
 
   @Test
   public void testInputArtifactDirectoryWarning() throws Exception {
-    MockGenruleSupport.setup(mockToolsConfig);
-    write("x/BUILD",
-          "genrule(name = 'x',",
-          "        outs = ['out'],",
-          "        cmd = '/bin/touch $(location out)',",
-          "        srcs = ['dir'])");
+    write(
+        "x/BUILD",
+        "genrule(name = 'x',",
+        "        outs = ['out'],",
+        "        cmd = 'touch $(location out)',",
+        "        srcs = ['dir'])");
     write("x/dir/empty");
 
     buildTarget("//x");

@@ -1489,6 +1489,72 @@ EOF
   assert_contains "\"value\": \"123456\"" output
 }
 
+# Regression test for b/205753626.
+# This test case isn't testing aquery for correctness, just using aquery as a
+# vehicle for testing lower-level logic.
+# TODO(b/205978333): Find a better home for this test case.
+function test_starlark_action_with_reqs_has_deterministic_action_key() {
+  local -r pkg="${FUNCNAME[0]}"
+  mkdir -p "$pkg" || fail "mkdir -p $pkg"
+
+  cat >$pkg/BUILD <<'EOF'
+load(":defs.bzl", "lots_of_reqs")
+lots_of_reqs(name = "reqs")
+EOF
+  cat >$pkg/defs.bzl <<'EOF'
+def _lots_of_reqs_impl(ctx):
+    f = ctx.actions.declare_file(ctx.attr.name + ".txt")
+    ctx.actions.run_shell(
+      outputs = [f],
+      command = "touch " + f.path,
+      execution_requirements = {"requires-" + str(i): "1" for i in range(100)},
+    )
+    return DefaultInfo(files = depset([f]))
+
+lots_of_reqs = rule(implementation = _lots_of_reqs_impl)
+EOF
+
+  bazel aquery $pkg:reqs > output1 2> "$TEST_log" || fail "Expected success"
+  bazel shutdown || fail "Couldn't shutdown"
+  bazel aquery $pkg:reqs > output2 2> "$TEST_log" || fail "Expected success"
+
+  diff <(grep ActionKey output1) <(grep ActionKey output2) \
+    || fail "Nondeterministic action key"
+}
+
+function test_execution_info() {
+  local pkg="${FUNCNAME[0]}"
+  mkdir -p "$pkg" || fail "mkdir -p $pkg"
+  cat > "$pkg/BUILD" <<'EOF'
+platform(
+    name = "exec",
+    exec_properties = {
+        "prop1": "foo",
+        "prop2": "bar",
+    },
+)
+
+genrule(
+    name = "bar",
+    srcs = ["dummy.txt"],
+    outs = ["bar_out.txt"],
+    cmd = "echo unused > $(OUTS)",
+)
+EOF
+  echo "hello aquery" > "$pkg/dummy.txt"
+
+  bazel aquery \
+    --extra_execution_platforms="//${pkg}:exec" \
+    --output=text \
+    "//$pkg:bar" > output 2> "$TEST_log" \
+    || fail "Expected success"
+  cat output >> "$TEST_log"
+  assert_contains "Execution platform: //${pkg}:exec" output
+
+  # Verify the execution platform's exec_properties end up as execution requirements.
+  assert_contains "ExecutionInfo: {prop1: foo, prop2: bar}" output
+}
+
 # Usage: assert_matches expected_pattern actual
 function assert_matches() {
   [[ "$2" =~ $1 ]] || fail "Expected to match '$1', was: $2"

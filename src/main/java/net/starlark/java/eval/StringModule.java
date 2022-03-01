@@ -66,7 +66,7 @@ final class StringModule implements StarlarkValue {
   private StringModule() {}
 
   // Returns s[start:stop:step], as if by Sequence.getSlice.
-  static String slice(String s, int start, int stop, int step) {
+  static String slice(String s, int start, int stop, int step) throws EvalException {
     RangeList indices = new RangeList(start, stop, step);
     int n = indices.size();
     if (n == 0) {
@@ -151,7 +151,8 @@ final class StringModule implements StarlarkValue {
     for (Object item : items) {
       if (!(item instanceof String)) {
         throw Starlark.errorf(
-            "expected string for sequence element %d, got '%s'", i, Starlark.type(item));
+            "expected string for sequence element %d, got '%s' of type %s",
+            i, Starlark.str(item), Starlark.type(item));
       }
       i++;
     }
@@ -1021,5 +1022,37 @@ final class StringModule implements StarlarkValue {
   // Computes str.substring(start, end).startsWith(prefix) without allocation.
   private static boolean substringStartsWith(String str, int start, int end, String prefix) {
     return start + prefix.length() <= end && str.startsWith(prefix, start);
+  }
+
+  @StarlarkMethod(
+      name = "removeprefix",
+      doc =
+          "If the string starts with <code>prefix</code>, returns a new string with the prefix "
+              + "removed. Otherwise, returns the string.",
+      parameters = {
+        @Param(name = "self", doc = "This string."),
+        @Param(name = "prefix", doc = "The prefix to remove if present."),
+      })
+  public String removePrefix(String self, String prefix) {
+    if (self.startsWith(prefix)) {
+      return self.substring(prefix.length());
+    }
+    return self;
+  }
+
+  @StarlarkMethod(
+      name = "removesuffix",
+      doc =
+          "If the string ends with <code>suffix</code>, returns a new string with the suffix "
+              + "removed. Otherwise, returns the string.",
+      parameters = {
+        @Param(name = "self", doc = "This string."),
+        @Param(name = "suffix", doc = "The suffix to remove if present."),
+      })
+  public String removeSuffix(String self, String suffix) {
+    if (self.endsWith(suffix)) {
+      return self.substring(0, self.length() - suffix.length());
+    }
+    return self;
   }
 }

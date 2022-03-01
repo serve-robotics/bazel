@@ -228,6 +228,7 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
 
   @Test
   public void testMacroHasGeneratorAttributes() throws Exception {
+    setBuildLanguageOptions("--experimental_builtins_injection_override=+cc_binary");
     scratch.file(
         "test/starlark/extension.bzl",
         "def _impl(ctx):",
@@ -266,10 +267,11 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
     assertThat(nativeMacro.getAttr("generator_function")).isEqualTo("native_macro");
     assertThat(nativeMacro.getAttr("generator_location")).isEqualTo("test/starlark/BUILD:5:18");
 
+    // Starlark version of cc_binary is created by a wrapper macro.
     Rule ccTarget = getRuleForTarget("cc_target");
-    assertThat(ccTarget.getAttr("generator_name")).isEqualTo("");
-    assertThat(ccTarget.getAttr("generator_function")).isEqualTo("");
-    assertThat(ccTarget.getAttr("generator_location")).isEqualTo("");
+    assertThat(ccTarget.getAttr("generator_name")).isEqualTo("cc_target");
+    assertThat(ccTarget.getAttr("generator_function")).isEqualTo("cc_binary");
+    assertThat(ccTarget.getAttr("generator_location")).isEqualTo("test/starlark/BUILD:6:10");
   }
 
   @Test
@@ -926,6 +928,44 @@ public class StarlarkIntegrationTest extends BuildViewTestCase {
             "label_dep.cc",
             "label_list_dep.cc",
             "dict_dep.cc");
+  }
+
+  @Test
+  public void testInstrumentedFilesInfo_coverageSupportAndEnvVarsArePrivateAPI() throws Exception {
+    // Arrange
+    scratch.file(
+        "test/starlark/extension.bzl",
+        "",
+        "def custom_rule_impl(ctx):",
+        "  return [",
+        "    coverage_common.instrumented_files_info(",
+        "      ctx,",
+        "      coverage_support_files = ctx.files.srcs,",
+        "      coverage_environment = {'k1' : 'v1'},",
+        "    ),",
+        "  ]",
+        "",
+        "custom_rule = rule(",
+        "  implementation = custom_rule_impl,",
+        "  attrs = {",
+        "    'srcs': attr.label_list(allow_files=True),",
+        "  },",
+        ")");
+    scratch.file(
+        "test/starlark/BUILD",
+        "load('//test/starlark:extension.bzl', 'custom_rule')",
+        "",
+        "custom_rule(",
+        "  name = 'foo',",
+        "  srcs = ['src1.txt'],",
+        ")");
+    reporter.removeHandler(failFastHandler);
+
+    // Act
+    getConfiguredTarget("//test/starlark:foo");
+
+    // Assert
+    assertContainsEvent("private API only for use in builtins");
   }
 
   @Test

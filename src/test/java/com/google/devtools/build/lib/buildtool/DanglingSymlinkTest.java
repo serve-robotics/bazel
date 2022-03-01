@@ -19,7 +19,6 @@ import static org.junit.Assert.assertThrows;
 import com.google.devtools.build.lib.actions.BuildFailedException;
 import com.google.devtools.build.lib.buildtool.util.BuildIntegrationTestCase;
 import com.google.devtools.build.lib.cmdline.TargetParsingException;
-import com.google.devtools.build.lib.packages.util.MockGenruleSupport;
 import com.google.devtools.build.lib.server.FailureDetails;
 import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.Path;
@@ -44,7 +43,6 @@ public class DanglingSymlinkTest extends BuildIntegrationTestCase {
    */
   @Test
   public void testDanglingSymlinks() throws Exception {
-    MockGenruleSupport.setup(mockToolsConfig);
     write("test/BUILD",
           "genrule(name='test_ln', srcs=[], outs=['test.out']," +
           " cmd='/bin/ln -sf wrong.out $(@D)/test.out')\n");
@@ -57,32 +55,6 @@ public class DanglingSymlinkTest extends BuildIntegrationTestCase {
     events.assertContainsError("output 'test/test.out' is a dangling symbolic link");
     events.assertContainsError(
         "Executing genrule //test:test_ln failed: not all outputs were created");
-  }
-
-  /**
-   * Regression test for bug 2411632: cc_library with *.so in srcs list doesn't
-   * work as expected.
-   */
-  @Test
-  public void testGeneratedLibs() throws Exception {
-    MockGenruleSupport.setup(mockToolsConfig);
-    write("test/liba.so");
-    write("test/BUILD",
-        "genrule(name = 'b',",
-        "        srcs = ['liba.so'],",
-        "        outs = ['libb.so'],",
-        "        cmd = 'cp $(SRCS) $@')",
-        "cc_library(name = 'c',",
-        "           srcs = [':b'])",
-        "cc_binary(name = 'd',",
-        "          srcs = ['d.cc'],",
-        "          deps = [':c'])");
-    write("test/a.cc");
-    write("test/d.cc", "int main() { return 0; }");
-
-    addOptions("--jobs=2");
-
-    buildTarget("//test:d");
   }
 
   /** Tests that bad symlinks for inputs are properly handled. */

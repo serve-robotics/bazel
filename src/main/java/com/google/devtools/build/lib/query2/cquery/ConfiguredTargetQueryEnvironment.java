@@ -16,7 +16,6 @@ package com.google.devtools.build.lib.query2.cquery;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 
 import com.google.common.base.Joiner;
-import com.google.common.base.Preconditions;
 import com.google.common.base.Verify;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -50,7 +49,6 @@ import com.google.devtools.build.lib.query2.engine.QueryUtil.ThreadSafeMutableKe
 import com.google.devtools.build.lib.query2.query.aspectresolvers.AspectResolver;
 import com.google.devtools.build.lib.rules.AliasConfiguredTarget;
 import com.google.devtools.build.lib.server.FailureDetails.ConfigurableQuery;
-import com.google.devtools.build.lib.skyframe.BuildConfigurationKey;
 import com.google.devtools.build.lib.skyframe.ConfiguredTargetKey;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -175,38 +173,15 @@ public class ConfiguredTargetQueryEnvironment
     return ImmutableList.of(new ConfigFunction());
   }
 
-  /**
-   * Returns a supplied {@link BuildConfigurationValue} if both have the same build options,
-   * otherwise throws an exception.
-   *
-   * <p>Noting the background of {@link BuildConfigurationKey#toComparableString}, multiple {@link
-   * BuildConfigurationKey} instances can correspond to the same {@link BuildConfigurationValue},
-   * especially when trimming is involved. We are only interested in configurations whose options
-   * differ - intricacies around differing fragments can be disregarded.
-   */
-  private static BuildConfigurationValue mergeEqualBuildConfiguration(
-      BuildConfigurationValue left, BuildConfigurationValue right) {
-    Preconditions.checkArgument(
-        left.getOptions().equals(right.getOptions()),
-        "Non-matching configurations: (%s, %s)",
-        left,
-        right);
-    return left;
-  }
-
   private static ImmutableMap<String, BuildConfigurationValue> getTransitiveConfigurations(
       Collection<SkyKey> transitiveConfigurationKeys, WalkableGraph graph)
       throws InterruptedException {
-    // mergeEqualBuildConfiguration can only fail if two BuildConfigurationValue have the same
-    // checksum but are not equal. This would be a black swan event.
+    // BuildConfigurationKey and BuildConfigurationValue should be 1:1
+    // so merge function intentionally omitted
     return graph.getSuccessfulValues(transitiveConfigurationKeys).values().stream()
         .map(BuildConfigurationValue.class::cast)
         .sorted(Comparator.comparing(BuildConfigurationValue::checksum))
-        .collect(
-            toImmutableMap(
-                BuildConfigurationValue::checksum,
-                Function.identity(),
-                ConfiguredTargetQueryEnvironment::mergeEqualBuildConfiguration));
+        .collect(toImmutableMap(BuildConfigurationValue::checksum, Function.identity()));
   }
 
   @Override
@@ -369,17 +344,18 @@ public class ConfiguredTargetQueryEnvironment
    *
    * @param pattern the original pattern that {@code targets} were parsed from. Used for error
    *     message.
-   * @param targets the set of {@link ConfiguredTarget}s whose labels represent the targets being
-   *     requested.
+   * @param targetsFuture the set of {@link ConfiguredTarget}s whose labels represent the targets
+   *     being requested.
    * @param configPrefix the configuration to request {@code targets} in. This can be the
    *     configuration's checksum, any prefix of its checksum, or the special identifiers "host",
    *     "target", or "null".
    * @param callback the callback to receive the results of this method.
    * @return {@link QueryTaskCallable} that returns the correctly configured targets.
    */
-  QueryTaskCallable<Void> getConfiguredTargetsForConfigFunction(
+  @SuppressWarnings("unchecked")
+  <T> QueryTaskCallable<Void> getConfiguredTargetsForConfigFunction(
       String pattern,
-      ThreadSafeMutableSet<KeyedConfiguredTarget> targets,
+      QueryTaskFuture<ThreadSafeMutableSet<T>> targetsFuture,
       String configPrefix,
       Callback<KeyedConfiguredTarget> callback) {
     // There's no technical reason other callers beside ConfigFunction can't call this. But they'd
@@ -387,6 +363,8 @@ public class ConfiguredTargetQueryEnvironment
     // remove that line: the counter-priority is making error messages as clear, precise, and
     // actionable as possible.
     return () -> {
+      ThreadSafeMutableSet<KeyedConfiguredTarget> targets =
+          (ThreadSafeMutableSet<KeyedConfiguredTarget>) targetsFuture.getIfSuccessful();
       List<KeyedConfiguredTarget> transformedResult = new ArrayList<>();
       boolean userFriendlyConfigName = true;
       for (KeyedConfiguredTarget target : targets) {

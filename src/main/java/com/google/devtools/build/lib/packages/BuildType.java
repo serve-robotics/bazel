@@ -21,17 +21,15 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.cmdline.LabelSyntaxException;
-import com.google.devtools.build.lib.cmdline.RepositoryMapping;
 import com.google.devtools.build.lib.packages.License.DistributionType;
 import com.google.devtools.build.lib.packages.License.LicenseParsingException;
 import com.google.devtools.build.lib.packages.Type.ConversionException;
 import com.google.devtools.build.lib.packages.Type.DictType;
 import com.google.devtools.build.lib.packages.Type.LabelClass;
 import com.google.devtools.build.lib.packages.Type.ListType;
-import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.SerializationConstant;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,33 +53,35 @@ public final class BuildType {
    * specially (and providing support for resolution of relative-labels in the <code>convert()
    * </code> method).
    */
-  @AutoCodec public static final Type<Label> LABEL = new LabelType(LabelClass.DEPENDENCY);
+  @SerializationConstant
+  public static final Type<Label> LABEL = new LabelType(LabelClass.DEPENDENCY);
   /** The type of a dictionary of {@linkplain #LABEL labels}. */
-  @AutoCodec
+  @SerializationConstant
   public static final DictType<String, Label> LABEL_DICT_UNARY =
       DictType.create(Type.STRING, LABEL);
   /** The type of a dictionary keyed by {@linkplain #LABEL labels} with string values. */
-  @AutoCodec
+  @SerializationConstant
   public static final DictType<Label, String> LABEL_KEYED_STRING_DICT =
       LabelKeyedDictType.create(Type.STRING);
   /** The type of a list of {@linkplain #LABEL labels}. */
-  @AutoCodec public static final ListType<Label> LABEL_LIST = ListType.create(LABEL);
+  @SerializationConstant public static final ListType<Label> LABEL_LIST = ListType.create(LABEL);
   /**
    * This is a label type that does not cause dependencies. It is needed because certain rules want
    * to verify the type of a target referenced by one of their attributes, but if there was a
    * dependency edge there, it would be a circular dependency.
    */
-  @AutoCodec
+  @SerializationConstant
   public static final Type<Label> NODEP_LABEL = new LabelType(LabelClass.NONDEP_REFERENCE);
   /** The type of a list of {@linkplain #NODEP_LABEL labels} that do not cause dependencies. */
-  @AutoCodec public static final ListType<Label> NODEP_LABEL_LIST = ListType.create(NODEP_LABEL);
+  @SerializationConstant
+  public static final ListType<Label> NODEP_LABEL_LIST = ListType.create(NODEP_LABEL);
   /**
    * The type of a license. Like Label, licenses aren't first-class, but they're important enough to
    * justify early syntax error detection.
    */
-  @AutoCodec public static final Type<License> LICENSE = new LicenseType();
+  @SerializationConstant public static final Type<License> LICENSE = new LicenseType();
   /** The type of a single distribution. Only used internally, as a type symbol, not a converter. */
-  @AutoCodec
+  @SerializationConstant
   static final Type<DistributionType> DISTRIBUTION =
       new Type<DistributionType>() {
         @Override
@@ -112,22 +112,21 @@ public final class BuildType {
    * The type of a set of distributions. Distributions are not a first-class type, but they do
    * warrant early syntax checking.
    */
-  @AutoCodec public static final Type<Set<DistributionType>> DISTRIBUTIONS = new Distributions();
+  @SerializationConstant
+  public static final Type<Set<DistributionType>> DISTRIBUTIONS = new Distributions();
   /** The type of an output file, treated as a {@link #LABEL}. */
-  @AutoCodec public static final Type<Label> OUTPUT = new OutputType();
+  @SerializationConstant public static final Type<Label> OUTPUT = new OutputType();
   /** The type of a list of {@linkplain #OUTPUT outputs}. */
-  @AutoCodec public static final ListType<Label> OUTPUT_LIST = ListType.create(OUTPUT);
+  @SerializationConstant public static final ListType<Label> OUTPUT_LIST = ListType.create(OUTPUT);
 
   /** The type of a TriState with values: true (x>0), false (x==0), auto (x<0). */
-  @AutoCodec public static final Type<TriState> TRISTATE = new TriStateType();
+  @SerializationConstant public static final Type<TriState> TRISTATE = new TriStateType();
 
   private BuildType() {
     // Do not instantiate
   }
 
-  /**
-   * Returns whether the specified type is a label type or not.
-   */
+  /** Returns whether the specified type is a label type or not. */
   public static boolean isLabelType(Type<?> type) {
     return type.getLabelClass() != LabelClass.NONE;
   }
@@ -141,8 +140,7 @@ public final class BuildType {
    * <p>The caller is responsible for casting the returned value appropriately.
    */
   public static <T> Object selectableConvert(
-      Type<T> type, Object x, Object what, LabelConversionContext context)
-      throws ConversionException {
+      Type<T> type, Object x, Object what, LabelConverter context) throws ConversionException {
     if (x instanceof com.google.devtools.build.lib.packages.SelectorList) {
       return new SelectorList<>(
           ((com.google.devtools.build.lib.packages.SelectorList) x).getElements(),
@@ -151,53 +149,6 @@ public final class BuildType {
           type);
     } else {
       return type.convert(x, what, context);
-    }
-  }
-
-  /** Context in which to evaluate a label with repository remappings */
-  public static class LabelConversionContext {
-    private final Label label;
-    private final RepositoryMapping repositoryMapping;
-    private final HashMap<String, Label> convertedLabelsInPackage;
-
-    public LabelConversionContext(
-        Label label,
-        RepositoryMapping repositoryMapping,
-        HashMap<String, Label> convertedLabelsInPackage) {
-      this.label = label;
-      this.repositoryMapping = repositoryMapping;
-      this.convertedLabelsInPackage = convertedLabelsInPackage;
-    }
-
-    Label getLabel() {
-      return label;
-    }
-
-    /** Returns the Label corresponding to the input, using the current conversion context. */
-    public Label convert(String input) throws LabelSyntaxException {
-      // Optimization: First check the package-local map, avoiding Label validation, Label
-      // construction, and global Interner lookup. This approach tends to be very profitable
-      // overall, since it's common for the targets in a single package to have duplicate
-      // label-strings across all their attribute values.
-      Label converted = convertedLabelsInPackage.get(input);
-      if (converted == null) {
-        converted = label.getRelativeWithRemapping(input, repositoryMapping);
-        convertedLabelsInPackage.put(input, converted);
-      }
-      return converted;
-    }
-
-    RepositoryMapping getRepositoryMapping() {
-      return repositoryMapping;
-    }
-
-    HashMap<String, Label> getConvertedLabelsInPackage() {
-      return convertedLabelsInPackage;
-    }
-
-    @Override
-    public String toString() {
-      return label.toString();
     }
   }
 
@@ -234,8 +185,7 @@ public final class BuildType {
     }
 
     @Override
-    public Label convert(Object x, Object what, Object context)
-        throws ConversionException {
+    public Label convert(Object x, Object what, Object context) throws ConversionException {
       if (x instanceof Label) {
         return (Label) x;
       }
@@ -249,20 +199,19 @@ public final class BuildType {
         String str = (String) x;
         // TODO(b/110101445): check if context is ever actually null
         if (context == null) {
-          return Label.parseAbsolute(
-              str, /* defaultToMain= */ false, /* repositoryMapping= */ ImmutableMap.of());
+          return Label.parseAbsolute(str, /* repositoryMapping= */ ImmutableMap.of());
           // TODO(b/110308446): remove instances of context being a Label
         } else if (context instanceof Label) {
           return ((Label) context).getRelativeWithRemapping(str, ImmutableMap.of());
-        } else if (context instanceof LabelConversionContext) {
-          LabelConversionContext labelConversionContext = (LabelConversionContext) context;
-          return labelConversionContext.convert(str);
+        } else if (context instanceof LabelConverter) {
+          LabelConverter labelConverter = (LabelConverter) context;
+          return labelConverter.convert(str);
         } else {
           throw new ConversionException("invalid context '" + context + "' in " + what);
         }
       } catch (LabelSyntaxException e) {
-        throw new ConversionException("invalid label '" + x + "' in "
-            + what + ": " + e.getMessage());
+        throw new ConversionException(
+            "invalid label '" + x + "' in " + what + ": " + e.getMessage());
       }
     }
   }
@@ -432,8 +381,7 @@ public final class BuildType {
     }
 
     @Override
-    public Label convert(Object x, Object what, Object context)
-        throws ConversionException {
+    public Label convert(Object x, Object what, Object context) throws ConversionException {
 
       String value;
       try {
@@ -443,16 +391,13 @@ public final class BuildType {
       }
       try {
         // Enforce value is relative to the context.
-        Label currentRule;
-        RepositoryMapping repositoryMapping;
-        if (context instanceof LabelConversionContext) {
-          currentRule = ((LabelConversionContext) context).getLabel();
-          repositoryMapping = ((LabelConversionContext) context).getRepositoryMapping();
-        } else {
+        if (!(context instanceof LabelConverter)) {
           throw new ConversionException("invalid context '" + context + "' in " + what);
         }
-        Label result = currentRule.getRelativeWithRemapping(value, repositoryMapping);
-        if (!result.getPackageIdentifier().equals(currentRule.getPackageIdentifier())) {
+
+        LabelConverter converter = (LabelConverter) context;
+        Label result = converter.convert(value);
+        if (!result.getPackageIdentifier().equals(converter.getBase().getPackageIdentifier())) {
           throw new ConversionException("label '" + value + "' is not in the current package");
         }
         return result;
@@ -476,7 +421,7 @@ public final class BuildType {
 
     @VisibleForTesting
     SelectorList(
-        List<Object> x, Object what, @Nullable LabelConversionContext context, Type<T> originalType)
+        List<Object> x, Object what, @Nullable LabelConverter context, Type<T> originalType)
         throws ConversionException {
       if (x.size() > 1 && originalType.concat(ImmutableList.of()) == null) {
         throw new ConversionException(
@@ -511,16 +456,14 @@ public final class BuildType {
     }
 
     /**
-     * Returns the native Type for this attribute (i.e. what this would be if it wasn't a
-     * selector list).
+     * Returns the native Type for this attribute (i.e. what this would be if it wasn't a selector
+     * list).
      */
     public Type<T> getOriginalType() {
       return originalType;
     }
 
-    /**
-     * Returns the labels of all configurability keys across all selects in this expression.
-     */
+    /** Returns the labels of all configurability keys across all selects in this expression. */
     public Set<Label> getKeyLabels() {
       ImmutableSet.Builder<Label> keys = ImmutableSet.builder();
       for (Selector<T> selector : elements) {
@@ -571,9 +514,9 @@ public final class BuildType {
   }
 
   /**
-   * Special Type that represents a selector expression for configurable attributes. Holds a
-   * mapping of {@code <Label, T>} entries, where keys are configurability patterns and values are
-   * objects of the attribute's native Type.
+   * Special Type that represents a selector expression for configurable attributes. Holds a mapping
+   * of {@code <Label, T>} entries, where keys are configurability patterns and values are objects
+   * of the attribute's native Type.
    */
   public static final class Selector<T> {
     /** Value to use when none of an attribute's selection criteria match. */
@@ -592,10 +535,7 @@ public final class BuildType {
 
     /** Creates a new Selector using the default error message when no conditions match. */
     Selector(
-        ImmutableMap<?, ?> x,
-        Object what,
-        @Nullable LabelConversionContext context,
-        Type<T> originalType)
+        ImmutableMap<?, ?> x, Object what, @Nullable LabelConverter context, Type<T> originalType)
         throws ConversionException {
       this(x, what, context, originalType, "");
     }
@@ -604,7 +544,7 @@ public final class BuildType {
     Selector(
         ImmutableMap<?, ?> x,
         Object what,
-        @Nullable LabelConversionContext context,
+        @Nullable LabelConverter context,
         Type<T> originalType,
         String noMatchError)
         throws ConversionException {
@@ -659,23 +599,19 @@ public final class BuildType {
       return map;
     }
 
-    /**
-     * Returns the value to use when none of the attribute's selection keys match.
-     */
+    /** Returns the value to use when none of the attribute's selection keys match. */
     public T getDefault() {
       return map.get(DEFAULT_CONDITION_LABEL);
     }
 
-    /**
-     * Returns whether or not this selector has a default condition.
-     */
+    /** Returns whether or not this selector has a default condition. */
     public boolean hasDefault() {
       return hasDefaultCondition;
     }
 
     /**
-     * Returns the native Type for this attribute (i.e. what this would be if it wasn't a
-     * selector expression).
+     * Returns the native Type for this attribute (i.e. what this would be if it wasn't a selector
+     * expression).
      */
     public Type<T> getOriginalType() {
       return originalType;
@@ -698,16 +634,16 @@ public final class BuildType {
     }
 
     /**
-     * Returns a custom error message for this select when no condition matches, or an empty
-     * string if no such message is declared.
+     * Returns a custom error message for this select when no condition matches, or an empty string
+     * if no such message is declared.
      */
     public String getNoMatchError() {
       return noMatchError;
     }
 
     /**
-     * Returns true for labels that are "reserved selector key words" and not intended to
-     * map to actual targets.
+     * Returns true for labels that are "reserved selector key words" and not intended to map to
+     * actual targets.
      */
     public static boolean isReservedLabel(Label label) {
       return DEFAULT_CONDITION_LABEL.equals(label);
@@ -740,8 +676,7 @@ public final class BuildType {
     }
 
     @Override
-    public TriState convert(Object x, Object what, Object context)
-        throws ConversionException {
+    public TriState convert(Object x, Object what, Object context) throws ConversionException {
       if (x instanceof TriState) {
         return (TriState) x;
       }

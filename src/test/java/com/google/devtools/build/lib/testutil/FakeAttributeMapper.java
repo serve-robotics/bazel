@@ -122,6 +122,11 @@ public class FakeAttributeMapper implements AttributeMap {
   }
 
   @Override
+  public boolean isPackageDefaultHdrsCheckSet() {
+    return false;
+  }
+
+  @Override
   public Boolean getPackageDefaultTestOnly() {
     return false;
   }
@@ -160,7 +165,7 @@ public class FakeAttributeMapper implements AttributeMap {
     }
 
     public FakeAttributeMapper build() {
-      return new FakeAttributeMapper(mapBuilder.build());
+      return new FakeAttributeMapper(mapBuilder.buildOrThrow());
     }
   }
 

@@ -17,13 +17,23 @@ Proto Semantics
 """
 
 def _preprocess(ctx):
-   pass
+    pass
 
 semantics = struct(
-   PROTO_COMPILER_LABEL = "@com_google_protobuf//:protoc",
-   EXTRA_ATTRIBUTES = {
-      "import_prefix": attr.string(),
-   },
-   EXTRA_FRAGMENTS = [],
-   preprocess = _preprocess,
- )
+    PROTO_COMPILER_LABEL = "@com_google_protobuf//:protoc",
+    EXTRA_ATTRIBUTES = {
+        "import_prefix": attr.string(),
+    },
+    EXTRA_FRAGMENTS = [],
+    preprocess = _preprocess,
+    # This constant is used in ProtoCompileActionBuilder to generate an error message that's
+    # displayed when a strict proto deps violation occurs.
+    #
+    # %s is replaced with the label of the proto_library rule that's currently being built.
+    # %%s is replaced with the literal "%s", which is passed to the proto-compiler, which replaces
+    # it with the .proto file that violates strict proto deps.
+    STRICT_DEPS_FLAG_TEMPLATE = (
+        "--direct_dependencies_violation_msg=" +
+        "%%s is imported, but %s doesn't directly depend on a proto_library that 'srcs' it."
+    ),
+)

@@ -17,6 +17,7 @@ package com.google.devtools.build.lib.actions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
+import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.util.DescribableExecutionUnit;
 import java.util.Collection;
@@ -100,24 +101,42 @@ public interface Spawn extends DescribableExecutionUnit {
   NestedSet<? extends ActionInput> getInputFiles();
 
   /**
-   * Returns the collection of files that this command must write.  Callers should not mutate
-   * the result.
+   * Returns the collection of files that this command will write. Callers should not mutate the
+   * result.
    *
    * <p>This is for use with remote execution, so remote execution does not have to guess what
-   * outputs the process writes.  While the order does not affect the semantics, it should be
-   * stable so it can be cached.
+   * outputs the process writes. While the order does not affect the semantics, it should be stable
+   * so it can be cached.
    */
   Collection<? extends ActionInput> getOutputFiles();
 
   /**
-   * Returns the resource owner for local fallback.
+   * Returns true if {@code output} must be created for the action to succeed. Can be used by remote
+   * execution implementations to mark a command as failed if it did not create an output, even if
+   * the command itself exited with a successful exit code.
+   *
+   * <p>Some actions, like tests, may have optional files (like .xml files) that may be created, but
+   * are not required, so their spawns should return false for those optional files. Note that in
+   * general, every output in {@link ActionAnalysisMetadata#getOutputs} is checked for existence in
+   * {@link com.google.devtools.build.lib.skyframe.SkyframeActionExecutor#checkOutputs}, so
+   * eventually all those outputs must be produced by at least one {@code Spawn} for that action, or
+   * locally by the action in some cases.
+   *
+   * <p>This method should not be overridden by any new Spawns if possible: outputs should be
+   * mandatory.
    */
+  default boolean isMandatoryOutput(ActionInput output) {
+    return true;
+  }
+
+  /** Returns the resource owner for local fallback. */
   ActionExecutionMetadata getResourceOwner();
 
   /**
-   * Returns the amount of resources needed for local fallback.
+   * Returns the amount of resources needed for local execution. Calling this may trigger an
+   * expensive computation: do not call unless actually needed!
    */
-  ResourceSet getLocalResources();
+  ResourceSet getLocalResources() throws ExecException;
 
   /**
    * Returns a mnemonic (string constant) for this kind of spawn.
@@ -150,5 +169,22 @@ public interface Spawn extends DescribableExecutionUnit {
   @Nullable
   default String getConfigurationChecksum() {
     return getResourceOwner().getOwner().getConfigurationChecksum();
+  }
+
+  @Override
+  @Nullable
+  default String getTargetLabel() {
+    Label label = getResourceOwner().getOwner().getLabel();
+    return label == null ? null : label.toString();
+  }
+
+  /**
+   * If true, this spawn strips output path config prefixes from its inputs, outputs, and command
+   * line (including .params files) before running on an executor.
+   *
+   * <p>See {@link PathStripper}.
+   */
+  default boolean stripOutputPaths() {
+    return false;
   }
 }

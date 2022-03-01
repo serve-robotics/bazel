@@ -26,10 +26,8 @@ import static org.junit.Assert.fail;
 
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.actions.BuildFailedException;
-import com.google.devtools.build.lib.analysis.util.AnalysisMock;
 import com.google.devtools.build.lib.buildtool.util.BuildIntegrationTestCase;
 import com.google.devtools.build.lib.events.Event;
-import com.google.devtools.build.lib.packages.util.MockGenruleSupport;
 import java.io.IOException;
 import java.util.Iterator;
 import org.junit.Before;
@@ -40,12 +38,6 @@ import org.junit.runners.JUnit4;
 /** A test of the semantics of the keepGoing flag: continue as much as possible after an error. */
 @RunWith(JUnit4.class)
 public class KeepGoingTest extends BuildIntegrationTestCase {
-
-  @Before
-  public void stageEmbeddedTools() throws Exception {
-    AnalysisMock.get().setupMockToolsRepository(mockToolsConfig);
-    MockGenruleSupport.setup(mockToolsConfig);
-  }
 
   @Before
   public final void addOptions() {
@@ -256,6 +248,7 @@ public class KeepGoingTest extends BuildIntegrationTestCase {
 
   @Test
   public void testConfigurationErrorsAreToleratedWithKeepGoing() throws Exception {
+    runtimeWrapper.addOptions("--experimental_builtins_injection_override=+cc_library");
     write("a/BUILD", "cc_library(name='a', srcs=['missing.foo'])");
     write("b/BUILD", "cc_library(name='b')");
 
@@ -266,7 +259,8 @@ public class KeepGoingTest extends BuildIntegrationTestCase {
     assertBuildFailedExceptionFromBuilding(
         "command succeeded, but not all targets were analyzed", "//a", "//b");
     events.assertContainsError(
-        "in srcs attribute of cc_library rule //a:a: " + "target '//a:missing.foo' does not exist");
+        "in srcs attribute of cc_library rule //a:a: source file '//a:missing.foo' is misplaced"
+            + " here");
     events.assertContainsInfo("Analysis succeeded for only 1 of 2 top-level targets");
 
     assertSameConfiguredTarget("//b:b");

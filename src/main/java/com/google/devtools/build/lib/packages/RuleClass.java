@@ -35,6 +35,7 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.collect.Ordering;
 import com.google.devtools.build.lib.analysis.config.Fragment;
+import com.google.devtools.build.lib.analysis.config.ToolchainTypeRequirement;
 import com.google.devtools.build.lib.analysis.config.transitions.ConfigurationTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.PatchTransition;
 import com.google.devtools.build.lib.analysis.config.transitions.SplitTransition;
@@ -48,7 +49,6 @@ import com.google.devtools.build.lib.events.NullEventHandler;
 import com.google.devtools.build.lib.packages.Attribute.ComputedDefault;
 import com.google.devtools.build.lib.packages.Attribute.StarlarkComputedDefaultTemplate;
 import com.google.devtools.build.lib.packages.Attribute.StarlarkComputedDefaultTemplate.CannotPrecomputeDefaultsException;
-import com.google.devtools.build.lib.packages.BuildType.LabelConversionContext;
 import com.google.devtools.build.lib.packages.BuildType.SelectorList;
 import com.google.devtools.build.lib.packages.ConfigurationFragmentPolicy.MissingFragmentPolicy;
 import com.google.devtools.build.lib.packages.RuleClass.Builder.RuleClassType;
@@ -57,6 +57,7 @@ import com.google.devtools.build.lib.packages.RuleFactory.AttributeValues;
 import com.google.devtools.build.lib.packages.Type.ConversionException;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec.VisibleForSerialization;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.SerializationConstant;
 import com.google.devtools.build.lib.util.StringUtil;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import java.io.Serializable;
@@ -74,6 +75,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
 import net.starlark.java.eval.EvalException;
@@ -122,7 +124,6 @@ import net.starlark.java.syntax.Location;
  */
 // Non-final only for mocking in tests. Do not subclass!
 @Immutable
-@AutoCodec
 public class RuleClass {
 
   /**
@@ -139,15 +140,15 @@ public class RuleClass {
    */
   private static final int MAX_ATTRIBUTE_NAME_LENGTH = 128;
 
-  @AutoCodec
+  @SerializationConstant
   static final Function<? super Rule, Map<String, Label>> NO_EXTERNAL_BINDINGS =
       Functions.constant(ImmutableMap.of());
 
-  @AutoCodec
+  @SerializationConstant
   static final Function<? super Rule, List<String>> NO_TOOLCHAINS_TO_REGISTER =
       Functions.constant(ImmutableList.of());
 
-  @AutoCodec
+  @SerializationConstant
   static final Function<? super Rule, Set<String>> NO_OPTION_REFERENCE =
       Functions.constant(ImmutableSet.of());
 
@@ -221,6 +222,22 @@ public class RuleClass {
     ENABLED,
     /** The rule should not use toolchain resolution. */
     DISABLED,
+    /**
+     * The rule instance uses toolchain resolution if it has a select().
+     *
+     * <p>This is for rules that don't intrinsically use toolchains but have select()s on {@link
+     * com.google.devtools.build.lib.rules.platform.ConstraintValue}, which are part of the build's
+     * platform. Such instances need to know what platform the build is targeting, which Bazel won't
+     * provide unless toolchain resolution is enabled.
+     *
+     * <p>This is set statically in rule definitions on an opt-in basis. Bazel doesn't automatically
+     * infer this for any target with a select().
+     *
+     * <p>Ultimately, we should remove this when <a
+     * href="https://github.com/bazelbuild/bazel/issues/12899#issuecomment-767759147}#12899</a>is
+     * addressed, so platforms are unconditionally provided for all rules.
+     */
+    HAS_SELECT,
     /** The rule should inherit the value from its parent rules. */
     INHERIT;
 
@@ -245,6 +262,7 @@ public class RuleClass {
         case ENABLED:
           return true;
         case DISABLED:
+        case HAS_SELECT: // Not true for RuleClass, but Rule may enable it.
           return false;
         default:
       }
@@ -380,7 +398,7 @@ public class RuleClass {
    * normal dependency resolution because they're needed to determine other dependencies. So there's
    * no intrinsic reason why we need an extra attribute to store them.
    *
-   * <p>There are three reasons why we still create this attribute:
+   * <p>There are four reasons why we still create this attribute:
    *
    * <ol>
    *   <li>Collecting them once in {@link #populateRuleAttributeValues} instead of multiple times in
@@ -390,6 +408,9 @@ public class RuleClass {
    *       we need to make sure its coverage remains complete.
    *   <li>Manual configuration trimming uses the normal dependency resolution process to work
    *       correctly and config_setting keys are subject to this trimming.
+   *   <li>{@link Rule#useToolchainResolution() supports conditional toolchain resolution for
+   *      targets with non-empty select()s. This requirement would go away if platform info was
+   *      prepared for all rules regardless of toolchain needs.
    * </ol>
    *
    * <p>It should be possible to clean up these issues if we decide we don't want an artificial
@@ -812,7 +833,7 @@ public class RuleClass {
     private ThirdPartyLicenseExistencePolicy thirdPartyLicenseExistencePolicy;
 
     private final Map<String, Attribute> attributes = new LinkedHashMap<>();
-    private final Set<Label> requiredToolchains = new HashSet<>();
+    private final Set<ToolchainTypeRequirement> toolchainTypes = new HashSet<>();
     private ToolchainResolutionMode useToolchainResolution = ToolchainResolutionMode.INHERIT;
     private ToolchainTransitionMode useToolchainTransition = ToolchainTransitionMode.INHERIT;
     private final Set<Label> executionPlatformConstraints = new HashSet<>();
@@ -849,7 +870,7 @@ public class RuleClass {
             .includeConfigurationFragmentsFrom(parent.getConfigurationFragmentPolicy());
         supportsConstraintChecking = parent.supportsConstraintChecking;
 
-        addRequiredToolchains(parent.getRequiredToolchains());
+        addToolchainTypes(parent.getToolchainTypes());
         this.useToolchainResolution =
             this.useToolchainResolution.apply(name, parent.useToolchainResolution);
         this.useToolchainTransition =
@@ -978,7 +999,7 @@ public class RuleClass {
           configurationFragmentPolicy.build(),
           supportsConstraintChecking,
           thirdPartyLicenseExistencePolicy,
-          requiredToolchains,
+          toolchainTypes,
           useToolchainResolution,
           useToolchainTransition,
           executionPlatformConstraints,
@@ -1260,8 +1281,8 @@ public class RuleClass {
     }
 
     /**
-     * Set if the rule can have any provider. This is true for "alias" rules like
-     * <code>bind</code> .
+     * Set if the rule can have any provider. This is called for the {@code alias} rule and other
+     * alias-like rules such as {@code bind}.
      */
     public Builder canHaveAnyProvider() {
       advertisedProviders.canHaveAnyProvider();
@@ -1509,20 +1530,41 @@ public class RuleClass {
     }
 
     /**
-     * Causes rules of this type to require the specified toolchains be available via toolchain
+     * Cause rules of this type to request the specified toolchains be available via toolchain
      * resolution when a target is configured.
      */
-    public Builder addRequiredToolchains(Iterable<Label> toolchainLabels) {
-      Iterables.addAll(this.requiredToolchains, toolchainLabels);
+    public Builder addToolchainTypes(Iterable<ToolchainTypeRequirement> toolchainTypes) {
+      Iterables.addAll(this.toolchainTypes, toolchainTypes);
       return this;
+    }
+
+    /**
+     * Cause rules of this type to request the specified toolchains be available via toolchain
+     * resolution when a target is configured.
+     */
+    public Builder addToolchainTypes(ToolchainTypeRequirement... toolchainTypes) {
+      return addToolchainTypes(ImmutableList.copyOf(toolchainTypes));
     }
 
     /**
      * Causes rules of this type to require the specified toolchains be available via toolchain
      * resolution when a target is configured.
      */
+    // TODO(katre): Remove this once all callers use addToolchainType.
     public Builder addRequiredToolchains(Label... toolchainLabels) {
-      return this.addRequiredToolchains(Lists.newArrayList(toolchainLabels));
+      return this.addRequiredToolchains(ImmutableList.copyOf(toolchainLabels));
+    }
+
+    /**
+     * Causes rules of this type to require the specified toolchains be available via toolchain
+     * resolution when a target is configured.
+     */
+    // TODO(katre): Remove this once all callers use addToolchainType.
+    public Builder addRequiredToolchains(Collection<Label> toolchainLabels) {
+      return this.addToolchainTypes(
+          toolchainLabels.stream()
+              .map(label -> ToolchainTypeRequirement.create(label))
+              .collect(Collectors.toList()));
     }
 
     /**
@@ -1737,7 +1779,7 @@ public class RuleClass {
 
   private final ThirdPartyLicenseExistencePolicy thirdPartyLicenseExistencePolicy;
 
-  private final ImmutableSet<Label> requiredToolchains;
+  private final ImmutableSet<ToolchainTypeRequirement> toolchainTypes;
   private final ToolchainResolutionMode useToolchainResolution;
   private final ToolchainTransitionMode useToolchainTransition;
   private final ImmutableSet<Label> executionPlatformConstraints;
@@ -1794,7 +1836,7 @@ public class RuleClass {
       ConfigurationFragmentPolicy configurationFragmentPolicy,
       boolean supportsConstraintChecking,
       ThirdPartyLicenseExistencePolicy thirdPartyLicenseExistencePolicy,
-      Set<Label> requiredToolchains,
+      Set<ToolchainTypeRequirement> toolchainTypes,
       ToolchainResolutionMode useToolchainResolution,
       ToolchainTransitionMode useToolchainTransition,
       Set<Label> executionPlatformConstraints,
@@ -1835,7 +1877,7 @@ public class RuleClass {
     this.configurationFragmentPolicy = configurationFragmentPolicy;
     this.supportsConstraintChecking = supportsConstraintChecking;
     this.thirdPartyLicenseExistencePolicy = thirdPartyLicenseExistencePolicy;
-    this.requiredToolchains = ImmutableSet.copyOf(requiredToolchains);
+    this.toolchainTypes = ImmutableSet.copyOf(toolchainTypes);
     this.useToolchainResolution = useToolchainResolution;
     this.useToolchainTransition = useToolchainTransition;
     this.executionPlatformConstraints = ImmutableSet.copyOf(executionPlatformConstraints);
@@ -2162,7 +2204,7 @@ public class RuleClass {
       RepositoryMapping repositoryMapping,
       AttributeValues<T> attributeValues,
       Interner<ImmutableList<?>> listInterner,
-      HashMap<String, Label> convertedLabelsInPackage,
+      Map<String, Label> convertedLabelsInPackage,
       EventHandler eventHandler) {
     BitSet definedAttrIndices = new BitSet();
     for (T attributeAccessor : attributeValues.getAttributeAccessors()) {
@@ -2499,10 +2541,10 @@ public class RuleClass {
       Object buildLangValue,
       RepositoryMapping repositoryMapping,
       Interner<ImmutableList<?>> listInterner,
-      HashMap<String, Label> convertedLabelsInPackage)
+      Map<String, Label> convertedLabelsInPackage)
       throws ConversionException {
-    LabelConversionContext context =
-        new LabelConversionContext(rule.getLabel(), repositoryMapping, convertedLabelsInPackage);
+    LabelConverter context =
+        new LabelConverter(rule.getLabel(), repositoryMapping, convertedLabelsInPackage);
     Object converted =
         BuildType.selectableConvert(
             attr.getType(),
@@ -2749,12 +2791,16 @@ public class RuleClass {
     return ignoreLicenses;
   }
 
-  public ImmutableSet<Label> getRequiredToolchains() {
-    return requiredToolchains;
+  public ImmutableSet<ToolchainTypeRequirement> getToolchainTypes() {
+    return toolchainTypes;
   }
 
-  public boolean useToolchainResolution() {
-    return this.useToolchainResolution.isActive();
+  /**
+   * Public callers should use {@link Rule#useToolchainResolution()}, which also takes into account
+   * target-specific information.
+   */
+  ToolchainResolutionMode useToolchainResolution() {
+    return this.useToolchainResolution;
   }
 
   public boolean useToolchainTransition() {

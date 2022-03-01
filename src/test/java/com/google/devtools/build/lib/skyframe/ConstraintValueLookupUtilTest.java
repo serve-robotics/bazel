@@ -58,7 +58,7 @@ public class ConstraintValueLookupUtilTest extends ToolchainTestCase {
       return ImmutableMap.<SkyFunctionName, SkyFunction>builder()
           .putAll(super.getSkyFunctions(directories))
           .put(GET_CONSTRAINT_VALUE_INFO_FUNCTION, new GetConstraintValueInfoFunction())
-          .build();
+          .buildOrThrow();
     }
   }
 
@@ -200,12 +200,6 @@ public class ConstraintValueLookupUtilTest extends ToolchainTestCase {
       } catch (InvalidConstraintValueException e) {
         throw new GetConstraintValueInfoFunctionException(e);
       }
-    }
-
-    @Nullable
-    @Override
-    public String extractTag(SkyKey skyKey) {
-      return null;
     }
   }
 

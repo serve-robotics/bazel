@@ -20,7 +20,6 @@ import com.google.auto.value.AutoValue;
 import com.google.common.collect.ImmutableCollection;
 import com.google.common.collect.ImmutableMap;
 import com.google.devtools.build.lib.actions.Artifact;
-import com.google.devtools.build.lib.actions.CommandLine;
 import com.google.devtools.build.lib.analysis.AliasProvider;
 import com.google.devtools.build.lib.analysis.FileProvider;
 import com.google.devtools.build.lib.analysis.FilesToRunProvider;
@@ -31,12 +30,10 @@ import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.collect.nestedset.Order;
-import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import javax.annotation.Nullable;
 
 /** An executable tool that is part of {@code java_toolchain}. */
 @AutoValue
-@AutoCodec
 public abstract class JavaToolchainTool {
 
   /** The executable, possibly a {@code _deploy.jar}. */
@@ -71,7 +68,10 @@ public abstract class JavaToolchainTool {
     NestedSet<String> jvmOpts =
         NestedSetBuilder.wrap(
             Order.STABLE_ORDER,
-            ruleContext.getExpander().withExecLocations(locations.build()).list(jvmOptsAttribute));
+            ruleContext
+                .getExpander()
+                .withExecLocations(locations.buildOrThrow())
+                .list(jvmOptsAttribute));
     return create(tool, dataArtifacts.build(), jvmOpts);
   }
 
@@ -86,8 +86,7 @@ public abstract class JavaToolchainTool {
         NestedSetBuilder.emptySet(STABLE_ORDER));
   }
 
-  @AutoCodec.Instantiator
-  static JavaToolchainTool create(
+  private static JavaToolchainTool create(
       FilesToRunProvider tool, NestedSet<Artifact> data, NestedSet<String> jvmOpts) {
     return new AutoValue_JavaToolchainTool(tool, data, jvmOpts);
   }
@@ -127,9 +126,10 @@ public abstract class JavaToolchainTool {
    * also {@link #buildCommandLine(CustomCommandLine.Builder, JavaToolchainProvider,
    * NestedSetBuilder)}.
    */
-  CommandLine buildCommandLine(JavaToolchainProvider toolchain, NestedSetBuilder<Artifact> inputs) {
+  CustomCommandLine.Builder buildCommandLine(
+      JavaToolchainProvider toolchain, NestedSetBuilder<Artifact> inputs) {
     CustomCommandLine.Builder command = CustomCommandLine.builder();
     buildCommandLine(command, toolchain, inputs);
-    return command.build();
+    return command;
   }
 }

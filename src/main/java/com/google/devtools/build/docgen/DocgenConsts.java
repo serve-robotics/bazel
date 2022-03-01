@@ -37,13 +37,13 @@ public class DocgenConsts {
   public static final String BE_NAV_TEMPLATE = BE_TEMPLATE_DIR + "/be-nav.vm";
 
   public static final String STARLARK_LIBRARY_TEMPLATE =
-      "com/google/devtools/build/docgen/templates/skylark-library.vm";
+      "com/google/devtools/build/docgen/templates/starlark-library.vm";
   public static final String STARLARK_NAV_TEMPLATE =
-      "com/google/devtools/build/docgen/templates/skylark-nav.vm";
+      "com/google/devtools/build/docgen/templates/starlark-nav.vm";
   public static final String STARLARK_MODULE_CATEGORY_TEMPLATE =
-      "com/google/devtools/build/docgen/templates/skylark-category.vm";
+      "com/google/devtools/build/docgen/templates/starlark-category.vm";
   public static final String STARLARK_OVERVIEW_TEMPLATE =
-      "com/google/devtools/build/docgen/templates/skylark-overview.vm";
+      "com/google/devtools/build/docgen/templates/starlark-overview.vm";
 
   public static final String VAR_LEFT_PANEL = "LEFT_PANEL";
 
@@ -160,19 +160,19 @@ public class DocgenConsts {
   /** e.g. "[DEPRECATED]" in &lt;!-- #BLAZE_RULE(...).ATTRIBUTE(...)[DEPRECATED] --&gt; */
   public static final Pattern BLAZE_RULE_FLAGS = Pattern.compile("^.*\\[(.*)\\].*$");
 
-  public static final ImmutableMap<String, Integer> ATTRIBUTE_ORDERING = ImmutableMap
-      .<String, Integer>builder()
-      .put("name", -99)
-      .put("deps", -98)
-      .put("src", -97)
-      .put("srcs", -96)
-      .put("data", -95)
-      .put("resource", -94)
-      .put("resources", -93)
-      .put("out", -92)
-      .put("outs", -91)
-      .put("hdrs", -90)
-      .build();
+  public static final ImmutableMap<String, Integer> ATTRIBUTE_ORDERING =
+      ImmutableMap.<String, Integer>builder()
+          .put("name", -99)
+          .put("deps", -98)
+          .put("src", -97)
+          .put("srcs", -96)
+          .put("data", -95)
+          .put("resource", -94)
+          .put("resources", -93)
+          .put("out", -92)
+          .put("outs", -91)
+          .put("hdrs", -90)
+          .buildOrThrow();
 
   // The following variables are not constants as they can be overridden from
   // StarlarkDocumentationProcessor#parseOptions

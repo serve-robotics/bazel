@@ -36,6 +36,9 @@ import java.util.Map;
 /**
  * Creates a {@link BuildInfoCollectionValue}. Only depends on the unique {@link
  * WorkspaceStatusValue} and the constant {@link #BUILD_INFO_FACTORIES} injected value.
+ *
+ * <p>For more information, see {@link
+ * com.google.devtools.build.lib.analysis.buildinfo.BuildInfoFactory}.
  */
 public class BuildInfoCollectionFunction implements SkyFunction {
 
@@ -90,14 +93,9 @@ public class BuildInfoCollectionFunction implements SkyFunction {
               collection.getActions(),
               keyAndConfig,
               /*outputFiles=*/ null);
-    } catch (ActionConflictException e) {
-      throw new IllegalStateException("Action conflicts not expected in build info: " + skyKey, e);
+    } catch (ActionConflictException | Actions.ArtifactGeneratedByOtherRuleException e) {
+      throw new IllegalStateException("Errors not expected in build info: " + skyKey, e);
     }
     return new BuildInfoCollectionValue(collection, generatingActions);
-  }
-
-  @Override
-  public String extractTag(SkyKey skyKey) {
-    return null;
   }
 }

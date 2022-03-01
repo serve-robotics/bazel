@@ -28,6 +28,7 @@ import com.google.devtools.build.lib.analysis.ServerDirectories;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollection;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
+import com.google.devtools.build.lib.analysis.config.FragmentFactory;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.clock.BlazeClock;
@@ -45,9 +46,11 @@ import com.google.devtools.build.lib.skyframe.SequencedSkyframeExecutor;
 import com.google.devtools.build.lib.testutil.FoundationTestCase;
 import com.google.devtools.build.lib.testutil.SkyframeExecutorTestHelper;
 import com.google.devtools.build.lib.testutil.TestConstants;
+import com.google.devtools.build.lib.util.Pair;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.Root;
+import com.google.devtools.build.lib.vfs.SyscallCache;
 import com.google.devtools.common.options.Converters;
 import com.google.devtools.common.options.Option;
 import com.google.devtools.common.options.OptionDocumentationCategory;
@@ -88,6 +91,7 @@ public abstract class ConfigurationTestCase extends FoundationTestCase {
   protected SequencedSkyframeExecutor skyframeExecutor;
   protected ImmutableSet<Class<? extends FragmentOptions>> buildOptionClasses;
   protected final ActionKeyContext actionKeyContext = new ActionKeyContext();
+  private FragmentFactory fragmentFactory;
 
   @Before
   public final void initializeSkyframeExecutor() throws Exception {
@@ -100,7 +104,6 @@ public abstract class ConfigurationTestCase extends FoundationTestCase {
             outputBase,
             ImmutableList.of(Root.fromPath(rootDirectory)),
             BazelSkyframeExecutorConstants.BUILD_FILES_BY_PRIORITY);
-    final PackageFactory pkgFactory;
     BlazeDirectories directories =
         new BlazeDirectories(
             new ServerDirectories(rootDirectory, outputBase, outputBase),
@@ -113,7 +116,7 @@ public abstract class ConfigurationTestCase extends FoundationTestCase {
     analysisMock.setupMockClient(mockToolsConfig);
     analysisMock.setupMockWorkspaceFiles(directories.getEmbeddedBinariesRoot());
 
-    pkgFactory =
+    PackageFactory pkgFactory =
         analysisMock
             .getPackageFactoryBuilderForTesting(directories)
             .build(ruleClassProvider, fileSystem);
@@ -127,6 +130,7 @@ public abstract class ConfigurationTestCase extends FoundationTestCase {
             .setActionKeyContext(actionKeyContext)
             .setWorkspaceStatusActionFactory(workspaceStatusActionFactory)
             .setExtraSkyFunctions(analysisMock.getSkyFunctions(directories))
+            .setPerCommandSyscallCache(SyscallCache.NO_CACHE)
             .build();
     SkyframeExecutorTestHelper.process(skyframeExecutor);
     skyframeExecutor.injectExtraPrecomputedValues(
@@ -158,6 +162,7 @@ public abstract class ConfigurationTestCase extends FoundationTestCase {
     analysisMock.setupMockClient(mockToolsConfig);
     analysisMock.setupMockWorkspaceFiles(directories.getEmbeddedBinariesRoot());
     buildOptionClasses = ruleClassProvider.getFragmentRegistry().getOptionsClasses();
+    fragmentFactory = new FragmentFactory();
   }
 
   protected void checkError(String expectedMessage, String... options) {
@@ -184,6 +189,17 @@ public abstract class ConfigurationTestCase extends FoundationTestCase {
    */
   protected BuildConfigurationCollection createCollection(
       ImmutableMap<String, Object> starlarkOptions, String... args) throws Exception {
+
+    Pair<BuildOptions, TestOptions> pair = parseBuildOptionsWithTestOptions(starlarkOptions, args);
+
+    skyframeExecutor.handleDiffsForTesting(reporter);
+    return skyframeExecutor.createConfigurations(
+        reporter, pair.getFirst(), ImmutableSortedSet.copyOf(pair.getSecond().multiCpus), false);
+  }
+
+  /** Parses purported commandline options into a BuildOptions (assumes default parsing context.) */
+  private Pair<BuildOptions, TestOptions> parseBuildOptionsWithTestOptions(
+      ImmutableMap<String, Object> starlarkOptions, String... args) throws Exception {
     OptionsParser parser =
         OptionsParser.builder()
             .optionsClasses(
@@ -196,12 +212,32 @@ public abstract class ConfigurationTestCase extends FoundationTestCase {
     parser.parse(TestConstants.PRODUCT_SPECIFIC_FLAGS);
     parser.parse(args);
 
-    ImmutableSortedSet<String> multiCpu = ImmutableSortedSet.copyOf(
-        parser.getOptions(TestOptions.class).multiCpus);
+    return Pair.of(
+        BuildOptions.of(buildOptionClasses, parser), parser.getOptions(TestOptions.class));
+  }
 
-    skyframeExecutor.handleDiffsForTesting(reporter);
-    return skyframeExecutor.createConfigurations(
-        reporter, BuildOptions.of(buildOptionClasses, parser), multiCpu, false);
+  /** Parses purported commandline options into a BuildOptions (assumes default parsing context.) */
+  protected BuildOptions parseBuildOptions(
+      ImmutableMap<String, Object> starlarkOptions, String... args) throws Exception {
+    return parseBuildOptionsWithTestOptions(starlarkOptions, args).getFirst();
+  }
+
+  /** Parses purported commandline options into a BuildOptions (assumes default parsing context.) */
+  protected BuildOptions parseBuildOptions(String... args) throws Exception {
+    return parseBuildOptions(ImmutableMap.of(), args);
+  }
+
+  /** Returns a raw {@link BuildConfigurationValue} with the given parameters. */
+  protected BuildConfigurationValue createRaw(
+      BuildOptions buildOptions, String repositoryName, boolean siblingRepositoryLayout)
+      throws Exception {
+    return BuildConfigurationValue.create(
+        buildOptions,
+        RepositoryName.create(repositoryName),
+        siblingRepositoryLayout,
+        skyframeExecutor.getBlazeDirectoriesForTesting(),
+        skyframeExecutor.getRuleClassProviderForTesting(),
+        fragmentFactory);
   }
 
   /**

@@ -36,7 +36,6 @@ import com.google.devtools.build.lib.rules.cpp.CcToolchain.AdditionalBuildVariab
 import com.google.devtools.build.lib.rules.cpp.CcToolchainFeatures.FeatureConfiguration;
 import com.google.devtools.build.lib.rules.cpp.CppConfiguration.Tool;
 import com.google.devtools.build.lib.rules.cpp.FdoContext.BranchFdoProfile;
-import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.lib.starlarkbuildapi.cpp.CcToolchainProviderApi;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import javax.annotation.Nullable;
@@ -46,7 +45,6 @@ import net.starlark.java.eval.StarlarkThread;
 
 /** Information about a C++ compiler used by the <code>cc_*</code> rules. */
 @Immutable
-@AutoCodec
 public final class CcToolchainProvider extends NativeInfo
     implements CcToolchainProviderApi<
             FeatureConfigurationForStarlark, BranchFdoProfile, FdoContext>,
@@ -363,7 +361,7 @@ public final class CcToolchainProvider extends NativeInfo
       result.put("ABI", getAbi());
     }
 
-    globalMakeEnvBuilder.putAll(result.build());
+    globalMakeEnvBuilder.putAll(result.buildOrThrow());
   }
 
   /**
@@ -465,6 +463,12 @@ public final class CcToolchainProvider extends NativeInfo
     return compilerFiles;
   }
 
+  @Override
+  public Depset getCompilerFilesForStarlark(StarlarkThread thread) throws EvalException {
+    CcModule.checkPrivateStarlarkificationAllowlist(thread);
+    return Depset.of(Artifact.TYPE, getCompilerFiles());
+  }
+
   /**
    * Returns the files necessary for compilation excluding headers, assuming that included files
    * will be discovered by input discovery. If the toolchain does not provide this fileset, falls
@@ -540,6 +544,12 @@ public final class CcToolchainProvider extends NativeInfo
 
   public NestedSet<Artifact> getDwpFiles() {
     return dwpFiles;
+  }
+
+  @Override
+  public Depset getDwpFilesForStarlark(StarlarkThread thread) throws EvalException {
+    CcModule.checkPrivateStarlarkificationAllowlist(thread);
+    return Depset.of(Artifact.TYPE, getDwpFiles());
   }
 
   /** Returns the files necessary for capturing code coverage. */
@@ -647,6 +657,14 @@ public final class CcToolchainProvider extends NativeInfo
    */
   public PathFragment getRuntimeSysroot() {
     return runtimeSysroot;
+  }
+
+  @Override
+  @Nullable
+  public String getRuntimeSysrootForStarlark(StarlarkThread thread) throws EvalException {
+    CcModule.checkPrivateStarlarkificationAllowlist(thread);
+    PathFragment runtimeSysroot = getRuntimeSysroot();
+    return runtimeSysroot != null ? runtimeSysroot.getPathString() : null;
   }
 
   /**

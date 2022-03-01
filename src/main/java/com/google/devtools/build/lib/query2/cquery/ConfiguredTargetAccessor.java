@@ -28,6 +28,7 @@ import com.google.devtools.build.lib.analysis.ToolchainCollection;
 import com.google.devtools.build.lib.analysis.ToolchainContext;
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.config.ConfigMatchingProvider;
+import com.google.devtools.build.lib.analysis.config.ToolchainTypeRequirement;
 import com.google.devtools.build.lib.analysis.configuredtargets.OutputFileConfiguredTarget;
 import com.google.devtools.build.lib.analysis.configuredtargets.RuleConfiguredTarget;
 import com.google.devtools.build.lib.cmdline.Label;
@@ -122,7 +123,10 @@ public class ConfiguredTargetAccessor implements TargetAccessor<KeyedConfiguredT
     ImmutableMap<Label, ConfigMatchingProvider> configConditions = actual.getConfigConditions();
     ConfiguredAttributeMapper attributeMapper =
         ConfiguredAttributeMapper.of(
-            rule, configConditions, keyedConfiguredTarget.getConfigurationChecksum());
+            rule,
+            configConditions,
+            keyedConfiguredTarget.getConfigurationChecksum(),
+            /*alwaysSucceed=*/ false);
     if (!attributeMapper.has(attrName)) {
       throw new QueryException(
           caller,
@@ -208,11 +212,12 @@ public class ConfiguredTargetAccessor implements TargetAccessor<KeyedConfiguredT
     }
 
     Rule rule = ((Rule) target);
-    if (!rule.getRuleClassObject().useToolchainResolution()) {
+    if (!rule.useToolchainResolution()) {
       return null;
     }
 
-    ImmutableSet<Label> requiredToolchains = rule.getRuleClassObject().getRequiredToolchains();
+    ImmutableSet<ToolchainTypeRequirement> toolchainTypes =
+        rule.getRuleClassObject().getToolchainTypes();
     // Collect local (target, rule) constraints for filtering out execution platforms.
     ImmutableSet<Label> execConstraintLabels =
         getExecutionPlatformConstraints(rule, config.getFragment(PlatformConfiguration.class));
@@ -232,7 +237,7 @@ public class ConfiguredTargetAccessor implements TargetAccessor<KeyedConfiguredT
                 walkableGraph.getValue(
                     ToolchainContextKey.key()
                         .configurationKey(configurationKey)
-                        .requiredToolchainTypeLabels(execGroup.requiredToolchains())
+                        .toolchainTypes(execGroup.toolchainTypes())
                         .execConstraintLabels(execGroup.execCompatibleWith())
                         .debugTarget(debugTarget)
                         .build());
@@ -246,7 +251,7 @@ public class ConfiguredTargetAccessor implements TargetAccessor<KeyedConfiguredT
               walkableGraph.getValue(
                   ToolchainContextKey.key()
                       .configurationKey(configurationKey)
-                      .requiredToolchainTypeLabels(requiredToolchains)
+                      .toolchainTypes(toolchainTypes)
                       .execConstraintLabels(execConstraintLabels)
                       .debugTarget(debugTarget)
                       .build());

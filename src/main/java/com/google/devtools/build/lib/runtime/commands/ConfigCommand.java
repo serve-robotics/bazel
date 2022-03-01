@@ -383,12 +383,12 @@ public class ConfigCommand implements BlazeCommand {
       findConfigurations(CommandEnvironment env) {
     InMemoryMemoizingEvaluator evaluator =
         (InMemoryMemoizingEvaluator)
-            env.getRuntime().getWorkspace().getSkyframeExecutor().getEvaluatorForTesting();
+            env.getRuntime().getWorkspace().getSkyframeExecutor().getEvaluator();
     return evaluator.getDoneValues().entrySet().stream()
         .filter(e -> SkyFunctions.BUILD_CONFIGURATION.equals(e.getKey().functionName()))
         .collect(
             toImmutableSortedMap(
-                comparing(BuildConfigurationKey::toComparableString),
+                comparing(e -> e.getOptions().checksum()),
                 e -> (BuildConfigurationKey) e.getKey(),
                 e -> (BuildConfigurationValue) e.getValue()));
   }
@@ -557,10 +557,14 @@ public class ConfigCommand implements BlazeCommand {
 
     // --define:
     for (Map.Entry<String, String> entry :
-        config.getOptions().get(CoreOptions.class).commandLineBuildVariables) {
+        config
+            .getOptions()
+            .get(CoreOptions.class)
+            .getNormalizedCommandLineBuildVariables()
+            .entrySet()) {
       ans.put("--define:" + entry.getKey(), Verify.verifyNotNull(entry.getValue()));
     }
-    return ans.build();
+    return ans.buildOrThrow();
   }
 
   /**
@@ -688,8 +692,7 @@ public class ConfigCommand implements BlazeCommand {
                               e -> toNullableStringPair(e.getValue())));
               fragmentDiffs.add(new FragmentDiffForOutput(fragmentName, sortedOptionDiffs));
             });
-    return new ConfigurationDiffForOutput(
-        configHash1, configHash2, ImmutableList.copyOf(fragmentDiffs.build()));
+    return new ConfigurationDiffForOutput(configHash1, configHash2, fragmentDiffs.build().asList());
   }
 
   private static Pair<String, String> toNullableStringPair(Pair<Object, Object> pair) {

@@ -34,6 +34,7 @@ import com.google.devtools.build.lib.packages.AttributeValueSource;
 import com.google.devtools.build.lib.packages.BazelModuleContext;
 import com.google.devtools.build.lib.packages.BazelStarlarkContext;
 import com.google.devtools.build.lib.packages.BuildType;
+import com.google.devtools.build.lib.packages.LabelConverter;
 import com.google.devtools.build.lib.packages.Provider;
 import com.google.devtools.build.lib.packages.StarlarkAspect;
 import com.google.devtools.build.lib.packages.StarlarkCallbackHelper;
@@ -41,10 +42,10 @@ import com.google.devtools.build.lib.packages.StarlarkProviderIdentifier;
 import com.google.devtools.build.lib.packages.Type;
 import com.google.devtools.build.lib.packages.Type.ConversionException;
 import com.google.devtools.build.lib.packages.Type.LabelClass;
+import com.google.devtools.build.lib.starlarkbuildapi.NativeComputedDefaultApi;
 import com.google.devtools.build.lib.starlarkbuildapi.StarlarkAttrModuleApi;
 import com.google.devtools.build.lib.util.FileType;
 import com.google.devtools.build.lib.util.FileTypeSet;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import javax.annotation.Nullable;
@@ -136,14 +137,16 @@ public final class StarlarkAttrModule implements StarlarkAttrModuleApi {
             new StarlarkComputedDefaultTemplate(type, callback.getParameterNames(), callback));
       } else if (defaultValue instanceof StarlarkLateBoundDefault) {
         builder.value((StarlarkLateBoundDefault) defaultValue); // unchecked cast
+      } else if (defaultValue instanceof NativeComputedDefaultApi) {
+        // TODO(b/200065655#comment3): This hack exists until default_copts and default_hdrs_check
+        //  in package() is replaced by proper package defaults. We don't check the particular
+        //  instance to avoid adding a dependency to the C++ package.
+        builder.value((NativeComputedDefaultApi) defaultValue);
       } else {
         BazelModuleContext moduleContext =
             BazelModuleContext.of(Module.ofInnermostEnclosingStarlarkFunction(thread));
         builder.defaultValue(
-            defaultValue,
-            new BuildType.LabelConversionContext(
-                moduleContext.label(), moduleContext.repoMapping(), new HashMap<>()),
-            DEFAULT_ARG);
+            defaultValue, LabelConverter.forModuleContext(moduleContext), DEFAULT_ARG);
       }
     }
 
@@ -262,10 +265,7 @@ public final class StarlarkAttrModule implements StarlarkAttrModuleApi {
       for (StarlarkAspect aspect : Sequence.cast(obj, StarlarkAspect.class, "aspects")) {
         aspect.attachToAspectsList(
             /** baseAspectName= */
-            null,
-            builder.getAspectsListBuilder(),
-            /** allowAspectsParameters= */
-            true);
+            null, builder.getAspectsListBuilder());
       }
     }
 
@@ -364,10 +364,11 @@ public final class StarlarkAttrModule implements StarlarkAttrModuleApi {
 
   private static final Map<Type<?>, String> whyNotConfigurable =
       ImmutableMap.<Type<?>, String>builder()
-          .put(BuildType.LICENSE,
+          .put(
+              BuildType.LICENSE,
               "loading phase license checking logic assumes non-configurable values")
           .put(BuildType.OUTPUT, "output paths are part of the static graph structure")
-          .build();
+          .buildOrThrow();
 
   /**
    * If the given attribute type is non-configurable, returns the reason why. Otherwise, returns
@@ -420,11 +421,7 @@ public final class StarlarkAttrModule implements StarlarkAttrModuleApi {
 
   @Override
   public Descriptor stringAttribute(
-      String defaultValue,
-      String doc,
-      Boolean mandatory,
-      Sequence<?> values,
-      StarlarkThread thread)
+      Object defaultValue, String doc, Boolean mandatory, Sequence<?> values, StarlarkThread thread)
       throws EvalException {
     BazelStarlarkContext.from(thread).checkLoadingOrWorkspacePhase("attr.string");
     return createAttrDescriptor(
@@ -497,11 +494,7 @@ public final class StarlarkAttrModule implements StarlarkAttrModuleApi {
 
   @Override
   public Descriptor stringListAttribute(
-      Boolean mandatory,
-      Boolean allowEmpty,
-      Sequence<?> defaultValue,
-      String doc,
-      StarlarkThread thread)
+      Boolean mandatory, Boolean allowEmpty, Object defaultValue, String doc, StarlarkThread thread)
       throws EvalException {
     BazelStarlarkContext.from(thread).checkLoadingOrWorkspacePhase("attr.string_list");
     return createAttrDescriptor(
@@ -760,6 +753,6 @@ public final class StarlarkAttrModule implements StarlarkAttrModuleApi {
         b.put(key, value);
       }
     }
-    return b.build();
+    return b.buildOrThrow();
   }
 }

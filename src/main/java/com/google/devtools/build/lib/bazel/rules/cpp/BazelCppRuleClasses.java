@@ -20,7 +20,6 @@ import static com.google.devtools.build.lib.packages.BuildType.LABEL_LIST;
 import static com.google.devtools.build.lib.packages.BuildType.NODEP_LABEL;
 import static com.google.devtools.build.lib.packages.BuildType.TRISTATE;
 import static com.google.devtools.build.lib.packages.ImplicitOutputsFunction.fromFunctions;
-import static com.google.devtools.build.lib.packages.ImplicitOutputsFunction.fromTemplates;
 import static com.google.devtools.build.lib.packages.Type.BOOLEAN;
 import static com.google.devtools.build.lib.packages.Type.STRING;
 import static com.google.devtools.build.lib.packages.Type.STRING_LIST;
@@ -44,7 +43,8 @@ import com.google.devtools.build.lib.analysis.BaseRuleClasses;
 import com.google.devtools.build.lib.analysis.PlatformConfiguration;
 import com.google.devtools.build.lib.analysis.RuleDefinition;
 import com.google.devtools.build.lib.analysis.RuleDefinitionEnvironment;
-import com.google.devtools.build.lib.analysis.config.HostTransition;
+import com.google.devtools.build.lib.analysis.config.ExecutionTransitionFactory;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.packages.Attribute;
 import com.google.devtools.build.lib.packages.AttributeMap;
 import com.google.devtools.build.lib.packages.ImplicitOutputsFunction.SafeImplicitOutputsFunction;
@@ -66,8 +66,6 @@ import com.google.devtools.build.lib.util.FileTypeSet;
  * Rule class definitions for C++ rules.
  */
 public class BazelCppRuleClasses {
-  static final SafeImplicitOutputsFunction CC_LIBRARY_DYNAMIC_LIB =
-      fromTemplates("%{dirname}lib%{basename}.so");
 
   static final SafeImplicitOutputsFunction CC_BINARY_IMPLICIT_OUTPUTS =
       fromFunctions(CppRuleClasses.CC_BINARY_STRIPPED, CppRuleClasses.CC_BINARY_DEBUG_PACKAGE);
@@ -371,7 +369,7 @@ public class BazelCppRuleClasses {
           .add(attr("linkstatic", BOOLEAN).value(true))
           .add(
               attr("$def_parser", LABEL)
-                  .cfg(HostTransition.createFactory())
+                  .cfg(ExecutionTransitionFactory.create())
                   .singleArtifact()
                   .value(
                       new Attribute.ComputedDefault() {
@@ -382,7 +380,7 @@ public class BazelCppRuleClasses {
                           // To avoid cycles in the dependency graph, return null for rules under
                           // @bazel_tools//third_party/def_parser and @bazel_tools//tools/cpp
                           String label = rule.getLabel().toString();
-                          String toolsRepository = env.getToolsRepository();
+                          RepositoryName toolsRepository = env.getToolsRepository();
                           return label.startsWith(toolsRepository + "//third_party/def_parser")
                                   // @bazel_tools//tools/cpp:malloc and @bazel_tools//tools/cpp:stl
                                   // are implicit dependencies of all cc rules,

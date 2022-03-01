@@ -17,6 +17,7 @@ package com.google.devtools.build.lib.rules.apple;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import com.google.devtools.build.lib.analysis.config.CoreOptionConverters.LabelConverter;
+import com.google.devtools.build.lib.analysis.config.CoreOptionConverters.LabelListConverter;
 import com.google.devtools.build.lib.analysis.config.FragmentOptions;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
@@ -53,15 +54,14 @@ public class AppleCommandLineOptions extends FragmentOptions {
   public boolean mandatoryMinimumVersion;
 
   @Option(
-    name = "experimental_objc_provider_from_linked",
-    defaultValue = "true",
-    documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
-    effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.BUILD_FILE_SEMANTICS},
-    help =
-        "Whether Apple rules which control linking should propagate objc provider at the top "
-            + "level"
-  )
-  // TODO(b/32411441): This flag should be default-off and then be removed.
+      name = "experimental_objc_provider_from_linked",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
+      effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.BUILD_FILE_SEMANTICS},
+      help =
+          "No-op. Kept here for backwards compatibility. This field will be removed in a "
+              + "future release.")
+  // TODO(b/32411441): This flag should be removed.
   public boolean objcProviderFromLinked;
 
   @Option(
@@ -395,16 +395,24 @@ public class AppleCommandLineOptions extends FragmentOptions {
               + " option may be provided multiple times.")
   public List<Map.Entry<ApplePlatform.PlatformType, AppleBitcodeMode>> appleBitcodeMode;
 
-  // TODO(b/180572694): Modify the Apple split transition to split the --apple_platforms out into a
-  // single --platform during the transition instead of splitting on the --*_cpus flags.
+  @Option(
+      name = "incompatible_enable_apple_toolchain_resolution",
+      defaultValue = "false",
+      documentationCategory = OptionDocumentationCategory.TOOLCHAIN,
+      effectTags = {OptionEffectTag.LOADING_AND_ANALYSIS},
+      metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
+      help =
+          "Use toolchain resolution to select the Apple SDK for apple rules (Starlark and native)")
+  public boolean incompatibleUseToolchainResolution;
+
   @Option(
       name = "apple_platforms",
-      converter = CommaSeparatedOptionListConverter.class,
-      defaultValue = "null",
+      converter = LabelListConverter.class,
+      defaultValue = "",
       documentationCategory = OptionDocumentationCategory.UNDOCUMENTED,
       effectTags = {OptionEffectTag.LOSES_INCREMENTAL_STATE, OptionEffectTag.LOADING_AND_ANALYSIS},
       help = "Comma-separated list of platforms to use when building Apple binaries.")
-  public List<String> applePlatforms;
+  public List<Label> applePlatforms;
 
   /** Returns whether the minimum OS version is explicitly set for the current platform. */
   public DottedVersion getMinimumOsVersion() {
@@ -510,6 +518,8 @@ public class AppleCommandLineOptions extends FragmentOptions {
     host.preferMutualXcode = preferMutualXcode;
     host.includeXcodeExecutionRequirements = includeXcodeExecutionRequirements;
     host.appleCrosstoolTop = appleCrosstoolTop;
+    host.applePlatforms = applePlatforms;
+    host.incompatibleUseToolchainResolution = incompatibleUseToolchainResolution;
 
     return host;
   }

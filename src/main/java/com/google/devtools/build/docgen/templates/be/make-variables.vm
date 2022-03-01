@@ -3,6 +3,13 @@
 layout: documentation
 title: Make Variables
 ---
+
+<div style="background-color: #EFCBCB; color: #AE2B2B;  border: 1px solid #AE2B2B; border-radius: 5px; border-left: 10px solid #AE2B2B; padding: 0.5em;">
+<b>IMPORTANT:</b> The Bazel docs have moved! Please update your bookmark to <a href="https://bazel.build/reference/be/make-variables" style="color: #0000EE;">https://bazel.build/reference/be/make-variables</a>
+<p/>
+You can <a href="https://blog.bazel.build/2022/02/17/Launching-new-Bazel-site.html" style="color: #0000EE;">read about</a> the migration, and let us <a href="https://forms.gle/onkAkr2ZwBmcbWXj7" style="color: #0000EE;">know what you think</a>.
+</div>
+
 #end
 #if (!$singlePage)
 #parse("com/google/devtools/build/docgen/templates/be/header.vm")
@@ -86,7 +93,7 @@ title: Make Variables
 </p>
 
 <p>
-  To write <code>$</code> as a a string literal (i.e. to prevent variable
+  To write <code>$</code> as a string literal (i.e. to prevent variable
   expansion), write <code>$$</code>.
 </p>
 
@@ -440,8 +447,8 @@ title: Make Variables
 
 <p>
   Rule and <a href="../toolchains.html">toolchain</a> writers can define
-  completely custom variables by returning a <a
-  href="../skylark/lib/TemplateVariableInfo.html">TemplateVariableInfo</a>
+  completely custom variables by returning a
+  <a href="../skylark/lib/TemplateVariableInfo.html">TemplateVariableInfo</a>
   provider. Any rules depending on these through the
   <code>toolchains</code> attribute can then read their values:
 </p>

@@ -31,6 +31,9 @@ import com.google.devtools.common.options.OptionDocumentationCategory;
 import com.google.devtools.common.options.OptionEffectTag;
 import com.google.devtools.common.options.OptionMetadataTag;
 import java.util.List;
+import net.starlark.java.annot.StarlarkMethod;
+import net.starlark.java.eval.EvalException;
+import net.starlark.java.eval.StarlarkThread;
 
 /** Configuration for Protocol Buffer Libraries. */
 @Immutable
@@ -38,6 +41,7 @@ import java.util.List;
 // configuration fragment in aspect definitions.
 @RequiresOptions(options = {ProtoConfiguration.Options.class})
 public class ProtoConfiguration extends Fragment implements ProtoConfigurationApi {
+
   /** Command line options. */
   public static class Options extends FragmentOptions {
     @Option(
@@ -81,7 +85,7 @@ public class ProtoConfiguration extends Fragment implements ProtoConfigurationAp
 
     @Option(
         name = "proto_compiler",
-        defaultValue = "@com_google_protobuf//:protoc",
+        defaultValue = ProtoConstants.DEFAULT_PROTOC_LABEL,
         converter = CoreOptionConverters.LabelConverter.class,
         documentationCategory = OptionDocumentationCategory.UNCATEGORIZED,
         effectTags = {OptionEffectTag.AFFECTS_OUTPUTS, OptionEffectTag.LOADING_AND_ANALYSIS},
@@ -138,6 +142,18 @@ public class ProtoConfiguration extends Fragment implements ProtoConfigurationAp
     public StrictDepsMode strictProtoDeps;
 
     @Option(
+        name = "strict_public_imports",
+        defaultValue = "off",
+        converter = CoreOptionConverters.StrictDepsConverter.class,
+        documentationCategory = OptionDocumentationCategory.INPUT_STRICTNESS,
+        effectTags = {OptionEffectTag.BUILD_FILE_SEMANTICS, OptionEffectTag.EAGERNESS_TO_EXIT},
+        metadataTags = {OptionMetadataTag.INCOMPATIBLE_CHANGE},
+        help =
+            "Unless OFF, checks that a proto_library target explicitly declares all targets used "
+                + "in 'import public' as exported.")
+    public StrictDepsMode strictPublicImports;
+
+    @Option(
       name = "cc_proto_library_header_suffixes",
       defaultValue = ".pb.h",
       documentationCategory = OptionDocumentationCategory.OUTPUT_SELECTION,
@@ -174,12 +190,12 @@ public class ProtoConfiguration extends Fragment implements ProtoConfigurationAp
       host.experimentalProtoDescriptorSetsIncludeSourceInfo =
           experimentalProtoDescriptorSetsIncludeSourceInfo;
       host.experimentalProtoExtraActions = experimentalProtoExtraActions;
-      host.protoCompiler = protoCompiler;
       host.protoToolchainForJava = protoToolchainForJava;
       host.protoToolchainForJ2objc = protoToolchainForJ2objc;
       host.protoToolchainForJavaLite = protoToolchainForJavaLite;
       host.protoToolchainForCc = protoToolchainForCc;
       host.strictProtoDeps = strictProtoDeps;
+      host.strictPublicImports = strictPublicImports;
       host.ccProtoLibraryHeaderSuffixes = ccProtoLibraryHeaderSuffixes;
       host.ccProtoLibrarySourceSuffixes = ccProtoLibrarySourceSuffixes;
       host.experimentalJavaProtoAddAllowedPublicImports =
@@ -202,8 +218,23 @@ public class ProtoConfiguration extends Fragment implements ProtoConfigurationAp
     this.options = options;
   }
 
+  @StarlarkMethod(name = "experimental_protoc_opts", structField = true, documented = false)
+  public ImmutableList<String> protocOptsForStarlark() throws EvalException {
+    return protocOpts();
+  }
+
   public ImmutableList<String> protocOpts() {
     return protocOpts;
+  }
+
+  @StarlarkMethod(
+      name = "experimental_proto_descriptorsets_include_source_info",
+      useStarlarkThread = true,
+      documented = false)
+  public boolean experimentalProtoDescriptorSetsIncludeSourceInfoForStarlark(StarlarkThread thread)
+      throws EvalException {
+    ProtoCommon.checkPrivateStarlarkificationAllowlist(thread);
+    return experimentalProtoDescriptorSetsIncludeSourceInfo();
   }
 
   public boolean experimentalProtoDescriptorSetsIncludeSourceInfo() {
@@ -219,7 +250,10 @@ public class ProtoConfiguration extends Fragment implements ProtoConfigurationAp
     return options.experimentalProtoExtraActions;
   }
 
-  @StarlarkConfigurationField(name = "proto_compiler", doc = "Label for the proto compiler.")
+  @StarlarkConfigurationField(
+      name = "proto_compiler",
+      doc = "Label for the proto compiler.",
+      defaultLabel = ProtoConstants.DEFAULT_PROTOC_LABEL)
   public Label protoCompiler() {
     return options.protoCompiler;
   }
@@ -232,12 +266,28 @@ public class ProtoConfiguration extends Fragment implements ProtoConfigurationAp
     return options.protoToolchainForJ2objc;
   }
 
+  @StarlarkConfigurationField(
+      name = "proto_toolchain_for_java_lite",
+      doc = "Label for the java lite proto toolchains.",
+      defaultLabel = ProtoConstants.DEFAULT_PROTOC_LABEL)
   public Label protoToolchainForJavaLite() {
     return options.protoToolchainForJavaLite;
   }
 
   public Label protoToolchainForCc() {
     return options.protoToolchainForCc;
+  }
+
+  @StarlarkMethod(name = "strict_proto_deps", useStarlarkThread = true, documented = false)
+  public String strictProtoDepsForStarlark(StarlarkThread thread) throws EvalException {
+    ProtoCommon.checkPrivateStarlarkificationAllowlist(thread);
+    return strictProtoDeps().toString();
+  }
+
+  @StarlarkMethod(name = "strict_public_imports", useStarlarkThread = true, documented = false)
+  public String strictPublicImportsForStarlark(StarlarkThread thread) throws EvalException {
+    ProtoCommon.checkPrivateStarlarkificationAllowlist(thread);
+    return options.strictPublicImports.toString();
   }
 
   public StrictDepsMode strictProtoDeps() {
@@ -254,6 +304,16 @@ public class ProtoConfiguration extends Fragment implements ProtoConfigurationAp
 
   public boolean strictPublicImports() {
     return options.experimentalJavaProtoAddAllowedPublicImports;
+  }
+
+  @StarlarkMethod(
+      name = "generated_protos_in_virtual_imports",
+      useStarlarkThread = true,
+      documented = false)
+  public boolean generatedProtosInVirtualImportsForStarlark(StarlarkThread thread)
+      throws EvalException {
+    ProtoCommon.checkPrivateStarlarkificationAllowlist(thread);
+    return generatedProtosInVirtualImports();
   }
 
   public boolean generatedProtosInVirtualImports() {

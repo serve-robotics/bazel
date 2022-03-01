@@ -82,6 +82,7 @@ import com.google.devtools.build.lib.testutil.SkyframeExecutorTestHelper;
 import com.google.devtools.build.lib.testutil.TestConstants;
 import com.google.devtools.build.lib.testutil.TestConstants.InternalTestExecutionMode;
 import com.google.devtools.build.lib.testutil.TestRuleClassProvider;
+import com.google.devtools.build.lib.testutil.TestUtils;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.ModifiedFileSet;
 import com.google.devtools.build.lib.vfs.PathFragment;
@@ -162,6 +163,8 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
 
   protected AnalysisTestUtil.DummyWorkspaceStatusActionFactory workspaceStatusActionFactory;
   private PathPackageLocator pkgLocator;
+  protected final TestUtils.DelegatingSyscallCache delegatingSyscallCache =
+      new TestUtils.DelegatingSyscallCache();
 
   @Before
   public final void createMocks() throws Exception {
@@ -195,6 +198,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
         .setActionKeyContext(actionKeyContext)
         .setWorkspaceStatusActionFactory(workspaceStatusActionFactory)
         .setExtraSkyFunctions(analysisMock.getSkyFunctions(directories))
+        .setPerCommandSyscallCache(delegatingSyscallCache)
         .build();
   }
 
@@ -340,6 +344,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
       FlagBuilder config,
       ImmutableSet<String> explicitTargetPatterns,
       ImmutableList<String> aspects,
+      ImmutableMap<String, String> aspectsParameters,
       String... labels)
       throws Exception {
     Set<Flag> flags = config.flags;
@@ -397,6 +402,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
             multiCpu,
             explicitTargetPatterns,
             aspects,
+            aspectsParameters,
             viewOptions,
             keepGoing,
             LOADING_PHASE_THREADS,
@@ -414,7 +420,13 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
   protected AnalysisResult update(
       EventBus eventBus, FlagBuilder config, ImmutableList<String> aspects, String... labels)
       throws Exception {
-    return update(eventBus, config, /*explicitTargetPatterns=*/ ImmutableSet.of(), aspects, labels);
+    return update(
+        eventBus,
+        config,
+        /*explicitTargetPatterns=*/ ImmutableSet.of(),
+        aspects,
+        /*aspectsParameters=*/ ImmutableMap.of(),
+        labels);
   }
 
   protected AnalysisResult update(EventBus eventBus, FlagBuilder config, String... labels)
@@ -436,6 +448,20 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
   protected AnalysisResult update(ImmutableList<String> aspects, String... labels)
       throws Exception {
     return update(new EventBus(), defaultFlags(), aspects, labels);
+  }
+
+  protected AnalysisResult update(
+      ImmutableList<String> aspects,
+      ImmutableMap<String, String> aspectsParameters,
+      String... labels)
+      throws Exception {
+    return update(
+        new EventBus(),
+        defaultFlags(),
+        /*explicitTargetPatterns=*/ ImmutableSet.of(),
+        aspects,
+        aspectsParameters,
+        labels);
   }
 
   protected ConfiguredTargetAndData getConfiguredTargetAndTarget(String label)
@@ -552,8 +578,7 @@ public abstract class AnalysisTestCase extends FoundationTestCase {
     ActionLookupValue actionLookupValue;
     try {
       actionLookupValue =
-          (ActionLookupValue)
-              skyframeExecutor.getEvaluatorForTesting().getExistingValue(actionLookupKey);
+          (ActionLookupValue) skyframeExecutor.getEvaluator().getExistingValue(actionLookupKey);
     } catch (InterruptedException e) {
       throw new IllegalStateException(e);
     }

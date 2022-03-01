@@ -205,7 +205,7 @@ public class SingleToolchainResolutionFunction implements SkyFunction {
       }
     }
 
-    ImmutableMap<ConfiguredTargetKey, Label> resolvedToolchainLabels = builder.build();
+    ImmutableMap<ConfiguredTargetKey, Label> resolvedToolchainLabels = builder.buildOrThrow();
     if (toolchainType == null || resolvedToolchainLabels.isEmpty()) {
       debugMessage(
           eventHandler,
@@ -292,12 +292,6 @@ public class SingleToolchainResolutionFunction implements SkyFunction {
     }
 
     return mismatchSettingsWithDefault.isEmpty();
-  }
-
-  @Nullable
-  @Override
-  public String extractTag(SkyKey skyKey) {
-    return null;
   }
 
   /** Used to indicate that a toolchain was not found for the current request. */

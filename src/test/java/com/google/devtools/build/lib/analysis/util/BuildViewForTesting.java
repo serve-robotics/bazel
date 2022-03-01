@@ -34,7 +34,9 @@ import com.google.common.collect.Sets;
 import com.google.common.eventbus.EventBus;
 import com.google.devtools.build.lib.actions.ActionLookupKey;
 import com.google.devtools.build.lib.actions.ArtifactFactory;
+import com.google.devtools.build.lib.actions.BuildFailedException;
 import com.google.devtools.build.lib.actions.PackageRoots;
+import com.google.devtools.build.lib.actions.TestExecException;
 import com.google.devtools.build.lib.analysis.AnalysisEnvironment;
 import com.google.devtools.build.lib.analysis.AnalysisOptions;
 import com.google.devtools.build.lib.analysis.AnalysisResult;
@@ -77,6 +79,7 @@ import com.google.devtools.build.lib.analysis.platform.ConstraintValueInfo;
 import com.google.devtools.build.lib.analysis.platform.PlatformInfo;
 import com.google.devtools.build.lib.analysis.starlark.StarlarkTransition;
 import com.google.devtools.build.lib.analysis.test.CoverageReportActionFactory;
+import com.google.devtools.build.lib.bugreport.BugReporter;
 import com.google.devtools.build.lib.causes.Cause;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
@@ -147,16 +150,13 @@ public class BuildViewForTesting {
       CoverageReportActionFactory coverageReportActionFactory) {
     this.buildView =
         new BuildView(
-            directories,
-            ruleClassProvider,
-            skyframeExecutor,
-            coverageReportActionFactory);
+            directories, ruleClassProvider, skyframeExecutor, coverageReportActionFactory);
     this.ruleClassProvider = ruleClassProvider;
     this.skyframeExecutor = Preconditions.checkNotNull(skyframeExecutor);
     this.skyframeBuildView = skyframeExecutor.getSkyframeBuildView();
   }
 
-  public Set<ActionLookupKey> getSkyframeEvaluatedActionLookupKeyCountForTesting() {
+  Set<ActionLookupKey> getSkyframeEvaluatedActionLookupKeyCountForTesting() {
     Set<ActionLookupKey> actionLookupKeys = populateActionLookupKeyMapAndGetDiff();
     Preconditions.checkState(
         actionLookupKeys.size() == skyframeBuildView.getEvaluatedCounts().total(),
@@ -170,7 +170,7 @@ public class BuildViewForTesting {
 
   private Set<ActionLookupKey> populateActionLookupKeyMapAndGetDiff() {
     ImmutableMap<ActionLookupKey, Version> newMap =
-        stream(skyframeExecutor.getEvaluatorForTesting().getGraphEntries())
+        stream(skyframeExecutor.getEvaluator().getGraphEntries())
             .filter(e -> e.getKey() instanceof ActionLookupKey)
             .collect(
                 toImmutableMap(
@@ -182,9 +182,7 @@ public class BuildViewForTesting {
         difference.entriesDiffering().keySet(), difference.entriesOnlyOnLeft().keySet());
   }
 
-  /**
-   * Returns whether the given configured target has errors.
-   */
+  /** Returns whether the given configured target has errors. */
   public boolean hasErrors(ConfiguredTarget configuredTarget) {
     return configuredTarget == null;
   }
@@ -196,13 +194,15 @@ public class BuildViewForTesting {
       Set<String> multiCpu,
       ImmutableSet<String> explicitTargetPatterns,
       List<String> aspects,
+      ImmutableMap<String, String> aspectsParameters,
       AnalysisOptions viewOptions,
       boolean keepGoing,
       int loadingPhaseThreads,
       TopLevelArtifactContext topLevelOptions,
       ExtendedEventHandler eventHandler,
       EventBus eventBus)
-      throws ViewCreationFailedException, InterruptedException, InvalidConfigurationException {
+      throws ViewCreationFailedException, InterruptedException, InvalidConfigurationException,
+          BuildFailedException, TestExecException {
     populateActionLookupKeyMapAndGetDiff();
     return buildView.update(
         loadingResult,
@@ -210,13 +210,16 @@ public class BuildViewForTesting {
         multiCpu,
         explicitTargetPatterns,
         aspects,
+        aspectsParameters,
         viewOptions,
         keepGoing,
         /*checkForActionConflicts=*/ true,
         loadingPhaseThreads,
         topLevelOptions,
+        /*reportIncompatibleTargets=*/ true,
         eventHandler,
         eventBus,
+        BugReporter.defaultInstance(),
         /*includeExecutionPhase=*/ false,
         /*mergedPhasesExecutionJobsCount=*/ 0);
   }
@@ -360,16 +363,17 @@ public class BuildViewForTesting {
       return ctd;
     }
 
-    // Collect the aspects.
+    ConfiguredTargetKey ctKey =
+        ConfiguredTargetKey.builder()
+            .setLabel(dependencyKey.getLabel())
+            .setConfiguration(ctd.getConfiguration())
+            .build();
+    List<SkyKey> aspectKeys =
+        dependencyKey.getAspects().getUsedAspects().stream()
+            .map(aspect -> AspectKeyCreator.createAspectKey(aspect.getAspect(), ctKey))
+            .collect(toImmutableList());
+
     try {
-      BuildConfigurationValue config = ctd.getConfiguration();
-      List<SkyKey> aspectKeys =
-          dependencyKey.getAspects().getUsedAspects().stream()
-              .map(
-                  aspect ->
-                      AspectKeyCreator.createAspectKey(
-                          dependencyKey.getLabel(), config, aspect.getAspect(), config))
-              .collect(toImmutableList());
       ImmutableList<ConfiguredAspect> configuredAspects =
           graph.getSuccessfulValues(aspectKeys).values().stream()
               .map(value -> (AspectValue) value)
@@ -406,8 +410,7 @@ public class BuildViewForTesting {
     }
 
     class SilentDependencyResolver extends DependencyResolver {
-      private SilentDependencyResolver() {
-      }
+      private SilentDependencyResolver() {}
 
       @Override
       protected Map<Label, Target> getTargets(
@@ -437,7 +440,6 @@ public class BuildViewForTesting {
     TargetAndConfiguration ctgNode = new TargetAndConfiguration(target, configuration);
     return dependencyResolver.dependentNodeMap(
         ctgNode,
-        configurations.getHostConfiguration(),
         /*aspect=*/ null,
         getConfigurableAttributeKeysForTesting(
             eventHandler,
@@ -469,8 +471,8 @@ public class BuildViewForTesting {
         if (BuildType.Selector.isReservedLabel(label)) {
           continue;
         }
-        ConfiguredTarget ct = getConfiguredTargetForTesting(
-            eventHandler, label, ctg.getConfiguration());
+        ConfiguredTarget ct =
+            getConfiguredTargetForTesting(eventHandler, label, ctg.getConfiguration());
         ConfigMatchingProvider matchProvider = ct.getProvider(ConfigMatchingProvider.class);
         ConstraintValueInfo constraintValueInfo = ct.get(ConstraintValueInfo.PROVIDER);
         if (matchProvider != null) {

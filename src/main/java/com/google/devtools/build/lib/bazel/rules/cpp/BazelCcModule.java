@@ -38,6 +38,7 @@ import com.google.devtools.build.lib.rules.cpp.LtoBackendArtifacts;
 import com.google.devtools.build.lib.starlarkbuildapi.cpp.BazelCcModuleApi;
 import net.starlark.java.eval.EvalException;
 import net.starlark.java.eval.Sequence;
+import net.starlark.java.eval.Starlark;
 import net.starlark.java.eval.StarlarkInt;
 import net.starlark.java.eval.StarlarkList;
 import net.starlark.java.eval.StarlarkThread;
@@ -182,7 +183,11 @@ public class BazelCcModule extends CcModule
       Object wholeArchive,
       Object additionalLinkstampDefines,
       Object onlyForDynamicLibs,
+      Object mainOutput,
       Object linkerOutputs,
+      Object useTestOnlyFlags,
+      Object pdbFile,
+      Object winDefFile,
       StarlarkThread thread)
       throws InterruptedException, EvalException {
     return super.link(
@@ -208,14 +213,24 @@ public class BazelCcModule extends CcModule
         wholeArchive,
         additionalLinkstampDefines,
         onlyForDynamicLibs,
+        mainOutput,
         linkerOutputs,
+        useTestOnlyFlags,
+        pdbFile,
+        winDefFile,
+        Starlark.UNBOUND,
         thread);
   }
 
   @Override
   public CcCompilationOutputs createCompilationOutputsFromStarlark(
-      Object objectsObject, Object picObjectsObject) throws EvalException {
-    return super.createCompilationOutputsFromStarlark(objectsObject, picObjectsObject);
+      Object objectsObject,
+      Object picObjectsObject,
+      Object ltoCopmilationContextObject,
+      StarlarkThread thread)
+      throws EvalException {
+    return super.createCompilationOutputsFromStarlark(
+        objectsObject, picObjectsObject, ltoCopmilationContextObject, thread);
   }
 
   @Override

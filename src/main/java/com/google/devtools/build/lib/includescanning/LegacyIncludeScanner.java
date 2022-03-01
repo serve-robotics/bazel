@@ -34,6 +34,7 @@ import com.google.devtools.build.lib.concurrent.ThreadSafety;
 import com.google.devtools.build.lib.includescanning.IncludeParser.Hints;
 import com.google.devtools.build.lib.includescanning.IncludeParser.Inclusion;
 import com.google.devtools.build.lib.includescanning.IncludeParser.Inclusion.Kind;
+import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.profiler.SilentCloseable;
 import com.google.devtools.build.lib.rules.cpp.IncludeScanner;
 import com.google.devtools.build.lib.vfs.IORuntimeException;
@@ -537,19 +538,13 @@ public class LegacyIncludeScanner implements IncludeScanner {
     }
     ArtifactRoot root = includer.getRoot();
     Artifact sourceArtifact =
-        artifactFactory.resolveSourceArtifactWithAncestor(
-            name, parentDirectory, root, RepositoryName.MAIN);
+        artifactFactory.resolveSourceArtifactWithAncestor(name, parent, root, RepositoryName.MAIN);
     if (sourceArtifact == null) {
       // If the name had up-level references, this path may not be under any package. Otherwise,
       // we must have gotten an artifact, since it should be under the same package as the
       // including artifact.
       Preconditions.checkState(
-          name.containsUplevelReferences(),
-          "%s %s %s %s",
-          name,
-          parentDirectory,
-          rootRelativePath,
-          root);
+          name.containsUplevelReferences(), "%s %s %s %s", name, parent, rootRelativePath, root);
     }
     return sourceArtifact;
   }
@@ -595,7 +590,7 @@ public class LegacyIncludeScanner implements IncludeScanner {
       ActionExecutionMetadata actionExecutionMetadata,
       ActionExecutionContext actionExecutionContext,
       Artifact grepIncludes)
-      throws IOException, ExecException, InterruptedException {
+      throws IOException, NoSuchPackageException, ExecException, InterruptedException {
     SkyFunction.Environment env = actionExecutionContext.getEnvironmentForDiscoveringInputs();
     ImmutableSet<Artifact> pathHints;
     if (parser.getHints() == null) {

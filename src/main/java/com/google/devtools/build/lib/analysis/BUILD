@@ -374,6 +374,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/actions:artifacts",
         "//src/main/java/com/google/devtools/build/lib/actions:commandline_item",
         "//src/main/java/com/google/devtools/build/lib/actions:execution_requirements",
+        "//src/main/java/com/google/devtools/build/lib/actions:file_metadata",
         "//src/main/java/com/google/devtools/build/lib/actions:fileset_output_symlink",
         "//src/main/java/com/google/devtools/build/lib/actions:localhost_capacity",
         "//src/main/java/com/google/devtools/build/lib/actions:package_roots",
@@ -400,6 +401,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/exec:test_xml_output_parser_exception",
         "//src/main/java/com/google/devtools/build/lib/graph",
         "//src/main/java/com/google/devtools/build/lib/packages",
+        "//src/main/java/com/google/devtools/build/lib/packages:configured_attribute_mapper",
         "//src/main/java/com/google/devtools/build/lib/packages:exec_group",
         "//src/main/java/com/google/devtools/build/lib/packages/semantics",
         "//src/main/java/com/google/devtools/build/lib/profiler",
@@ -443,6 +445,7 @@ java_library(
         "//src/main/protobuf:test_status_java_proto",
         "//third_party:auto_value",
         "//third_party:caffeine",
+        "//third_party:flogger",
         "//third_party:guava",
         "//third_party:jsr305",
         "//third_party/protobuf:protobuf_java",
@@ -606,6 +609,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/actions:action_lookup_key",
         "//src/main/java/com/google/devtools/build/lib/actions:artifacts",
         "//src/main/java/com/google/devtools/build/lib/actions:package_roots",
+        "//src/main/java/com/google/devtools/build/lib/bugreport",
         "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
         "//src/main/java/com/google/devtools/build/lib/concurrent",
@@ -873,7 +877,6 @@ java_library(
         ":blaze_version_info",
         "//src/main/java/com/google/devtools/build/lib/buildeventstream",
         "//src/main/java/com/google/devtools/build/lib/buildeventstream/proto:build_event_stream_java_proto",
-        "//src/main/java/com/google/devtools/build/lib/util:process",
         "//third_party:guava",
     ],
 )
@@ -900,7 +903,6 @@ java_library(
     name = "package_specification_provider",
     srcs = ["PackageSpecificationProvider.java"],
     deps = [
-        ":transitive_info_provider",
         "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
         "//src/main/java/com/google/devtools/build/lib/packages",
     ],
@@ -1158,6 +1160,7 @@ java_library(
         ":transitive_info_provider_map",
         "//src/main/java/com/google/devtools/build/lib/collect",
         "//src/main/java/com/google/devtools/build/lib/packages",
+        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
         "//third_party:guava",
         "//third_party:jsr305",
     ],
@@ -1231,7 +1234,6 @@ java_library(
         ":actions/file_write_action_context",
         "//src/main/java/com/google/devtools/build/lib/actions",
         "//src/main/java/com/google/devtools/build/lib/actions:artifacts",
-        "//src/main/java/com/google/devtools/build/lib/cmdline",
         "//src/main/java/com/google/devtools/build/lib/collect/nestedset",
         "//third_party:guava",
         "//third_party:jsr305",
@@ -1501,7 +1503,6 @@ java_library(
     deps = [
         ":config/fragment",
         "//src/main/java/com/google/devtools/build/lib/concurrent",
-        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec:serialization-constant",
         "//src/main/java/com/google/devtools/build/lib/util",
         "//third_party:guava",
@@ -1523,6 +1524,8 @@ java_library(
         ":config/core_options",
         ":config/fragment",
         ":config/fragment_class_set",
+        ":config/fragment_factory",
+        ":config/fragment_registry",
         ":config/invalid_configuration_exception",
         ":config/run_under",
         ":platform_options",
@@ -1704,6 +1707,22 @@ java_library(
 )
 
 java_library(
+    name = "config/fragment_factory",
+    srcs = ["config/FragmentFactory.java"],
+    deps = [
+        ":config/build_options",
+        ":config/core_options",
+        ":config/fragment",
+        ":config/fragment_options",
+        ":config/invalid_configuration_exception",
+        "//third_party:auto_value",
+        "//third_party:caffeine",
+        "//third_party:guava",
+        "//third_party:jsr305",
+    ],
+)
+
+java_library(
     name = "config/fragment_registry",
     srcs = ["config/FragmentRegistry.java"],
     deps = [
@@ -1801,6 +1820,15 @@ java_library(
         "//third_party:error_prone_annotations",
         "//third_party:guava",
         "//third_party:jsr305",
+    ],
+)
+
+java_library(
+    name = "config/toolchain_type_requirement",
+    srcs = ["config/ToolchainTypeRequirement.java"],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib/cmdline",
+        "//third_party:auto_value",
     ],
 )
 
@@ -2380,6 +2408,7 @@ java_library(
     name = "test/test_trimming_transition_factory",
     srcs = ["test/TestTrimmingTransitionFactory.java"],
     deps = [
+        ":analysis_cluster",
         ":config/build_options",
         ":config/build_options_cache",
         ":config/core_options",

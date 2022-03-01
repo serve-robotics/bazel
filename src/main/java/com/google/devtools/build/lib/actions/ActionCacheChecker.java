@@ -392,7 +392,8 @@ public class ActionCacheChecker {
       }
     }
 
-    return new CachedOutputMetadata(remoteFileMetadata.build(), mergedTreeMetadata.build());
+    return new CachedOutputMetadata(
+        remoteFileMetadata.buildOrThrow(), mergedTreeMetadata.buildOrThrow());
   }
 
   /**
@@ -414,7 +415,8 @@ public class ActionCacheChecker {
       EventHandler handler,
       MetadataHandler metadataHandler,
       ArtifactExpander artifactExpander,
-      Map<String, String> remoteDefaultPlatformProperties)
+      Map<String, String> remoteDefaultPlatformProperties,
+      boolean isRemoteCacheEnabled)
       throws InterruptedException {
     // TODO(bazel-team): (2010) For RunfilesAction/SymlinkAction and similar actions that
     // produce only symlinks we should not check whether inputs are valid at all - all that matters
@@ -456,8 +458,11 @@ public class ActionCacheChecker {
     }
     ActionCache.Entry entry = getCacheEntry(action);
     CachedOutputMetadata cachedOutputMetadata = null;
-    // load remote metadata from action cache
-    if (entry != null && !entry.isCorrupted() && cacheConfig.storeOutputMetadata()) {
+    if (entry != null
+        && !entry.isCorrupted()
+        && cacheConfig.storeOutputMetadata()
+        && isRemoteCacheEnabled) {
+      // load remote metadata from action cache
       cachedOutputMetadata = loadCachedOutputMetadata(action, entry, metadataHandler);
     }
 
@@ -748,6 +753,33 @@ public class ActionCacheChecker {
     } else {
       actionCache.accountHit();
     }
+  }
+
+  /**
+   * Only call if action requires execution because there was a failure to record action cache hit
+   */
+  public Token getTokenUnconditionallyAfterFailureToRecordActionCacheHit(
+      Action action,
+      List<Artifact> resolvedCacheArtifacts,
+      Map<String, String> clientEnv,
+      EventHandler handler,
+      MetadataHandler metadataHandler,
+      ArtifactExpander artifactExpander,
+      Map<String, String> remoteDefaultPlatformProperties,
+      boolean isRemoteCacheEnabled)
+      throws InterruptedException {
+    if (action != null) {
+      removeCacheEntry(action);
+    }
+    return getTokenIfNeedToExecute(
+        action,
+        resolvedCacheArtifacts,
+        clientEnv,
+        handler,
+        metadataHandler,
+        artifactExpander,
+        remoteDefaultPlatformProperties,
+        isRemoteCacheEnabled);
   }
 
   /** Returns an action key. It is always set to the first output exec path string. */

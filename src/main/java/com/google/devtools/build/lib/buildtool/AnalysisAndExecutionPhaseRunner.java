@@ -13,13 +13,12 @@
 // limitations under the License.
 package com.google.devtools.build.lib.buildtool;
 
-import com.google.common.base.Stopwatch;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.flogger.GoogleLogger;
 import com.google.devtools.build.lib.actions.BuildFailedException;
+import com.google.devtools.build.lib.actions.TestExecException;
 import com.google.devtools.build.lib.analysis.AnalysisAndExecutionResult;
-import com.google.devtools.build.lib.analysis.AnalysisPhaseCompleteEvent;
 import com.google.devtools.build.lib.analysis.BuildView;
 import com.google.devtools.build.lib.analysis.ViewCreationFailedException;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
@@ -47,7 +46,6 @@ import com.google.devtools.common.options.OptionsParsingException;
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Intended drop-in replacement for AnalysisPhaseRunner after we're done with merging Skyframe's
@@ -69,7 +67,7 @@ public final class AnalysisAndExecutionPhaseRunner {
       TargetPatternPhaseValue loadingResult)
       throws BuildFailedException, InterruptedException, ViewCreationFailedException,
           TargetParsingException, LoadingFailedException, AbruptExitException,
-          InvalidConfigurationException {
+          InvalidConfigurationException, TestExecException {
 
     // Compute the heuristic instrumentation filter if needed.
     if (request.needsInstrumentationFilter()) {
@@ -162,6 +160,9 @@ public final class AnalysisAndExecutionPhaseRunner {
    *     and request.keepGoing.
    * @throws InterruptedException if the current thread was interrupted.
    * @throws ViewCreationFailedException if analysis failed for any reason.
+   * @throws InvalidConfigurationException if the configuration can't be determined.
+   * @throws BuildFailedException if action execution failed.
+   * @throws TestExecException if test execution failed.
    */
   private static AnalysisAndExecutionResult runAnalysisAndExecutionPhase(
       CommandEnvironment env,
@@ -169,8 +170,8 @@ public final class AnalysisAndExecutionPhaseRunner {
       TargetPatternPhaseValue loadingResult,
       BuildOptions targetOptions,
       Set<String> multiCpu)
-      throws InterruptedException, InvalidConfigurationException, ViewCreationFailedException {
-    Stopwatch timer = Stopwatch.createStarted();
+      throws InterruptedException, InvalidConfigurationException, ViewCreationFailedException,
+          BuildFailedException, TestExecException {
     env.getReporter().handle(Event.progress("Loading complete.  Analyzing..."));
 
     ImmutableSet<String> explicitTargetPatterns =
@@ -182,36 +183,26 @@ public final class AnalysisAndExecutionPhaseRunner {
             env.getRuntime().getRuleClassProvider(),
             env.getSkyframeExecutor(),
             env.getRuntime().getCoverageReportActionFactory(request));
-    AnalysisAndExecutionResult analysisAndExecutionResult =
-        (AnalysisAndExecutionResult)
-            view.update(
-                loadingResult,
-                targetOptions,
-                multiCpu,
-                explicitTargetPatterns,
-                request.getAspects(),
-                request.getViewOptions(),
-                request.getKeepGoing(),
-                request.getCheckForActionConflicts(),
-                request.getLoadingPhaseThreadCount(),
-                request.getTopLevelArtifactContext(),
-                env.getReporter(),
-                env.getEventBus(),
-                /*includeExecutionPhase=*/ true,
-                request.getBuildOptions().jobs);
-
-    // TODO(bazel-team): Merge these into one event.
-    env.getEventBus()
-        .post(
-            new AnalysisPhaseCompleteEvent(
-                analysisAndExecutionResult.getTargetsToBuild(),
-                view.getEvaluatedCounts(),
-                view.getEvaluatedActionsCounts(),
-                timer.stop().elapsed(TimeUnit.MILLISECONDS),
-                view.getAndClearPkgManagerStatistics(),
-                env.getSkyframeExecutor().wasAnalysisCacheDiscardedAndResetBit()));
     // TODO(b/199053098) TestFilteringCompleteEvent.
-    return analysisAndExecutionResult;
+    return (AnalysisAndExecutionResult)
+        view.update(
+            loadingResult,
+            targetOptions,
+            multiCpu,
+            explicitTargetPatterns,
+            request.getAspects(),
+            request.getAspectsParameters(),
+            request.getViewOptions(),
+            request.getKeepGoing(),
+            request.getCheckForActionConflicts(),
+            request.getLoadingPhaseThreadCount(),
+            request.getTopLevelArtifactContext(),
+            request.reportIncompatibleTargets(),
+            env.getReporter(),
+            env.getEventBus(),
+            env.getRuntime().getBugReporter(),
+            /*includeExecutionPhase=*/ true,
+            request.getBuildOptions().jobs);
   }
 
   /**

@@ -42,7 +42,6 @@ import com.google.devtools.build.lib.server.FailureDetails;
 import com.google.devtools.build.lib.server.FailureDetails.FailureDetail;
 import com.google.devtools.build.lib.skyframe.SkyframeBuildView;
 import com.google.devtools.build.lib.skyframe.SkyframeExecutor;
-import com.google.devtools.build.lib.skyframe.TopDownActionCache;
 import com.google.devtools.build.lib.skyframe.WorkspaceInfoFromDiff;
 import com.google.devtools.build.lib.util.AbruptExitException;
 import com.google.devtools.build.lib.util.DetailedExitCode;
@@ -52,6 +51,7 @@ import com.google.devtools.build.lib.vfs.FileSystemUtils;
 import com.google.devtools.build.lib.vfs.OutputService;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
+import com.google.devtools.build.lib.vfs.SyscallCache;
 import com.google.devtools.common.options.OptionsParsingResult;
 import com.google.devtools.common.options.OptionsProvider;
 import com.google.protobuf.Any;
@@ -99,6 +99,7 @@ public class CommandEnvironment {
   private final PathPackageLocator packageLocator;
   private final Path workingDirectory;
   private final PathFragment relativeWorkingDirectory;
+  private final SyscallCache syscallCache;
   private final Duration waitTime;
   private final long commandStartTime;
   private final ImmutableList<Any> commandExtensions;
@@ -106,7 +107,6 @@ public class CommandEnvironment {
   private final Consumer<String> shutdownReasonConsumer;
 
   private OutputService outputService;
-  private TopDownActionCache topDownActionCache;
   private String workspaceName;
   private boolean hasSyncedPackageLoading = false;
   @Nullable private WorkspaceInfoFromDiff workspaceInfoFromDiff;
@@ -161,6 +161,7 @@ public class CommandEnvironment {
       Thread commandThread,
       Command command,
       OptionsParsingResult options,
+      SyscallCache syscallCache,
       List<String> warnings,
       long waitTimeInMs,
       long commandStartTime,
@@ -175,6 +176,7 @@ public class CommandEnvironment {
     this.command = command;
     this.options = options;
     this.shutdownReasonConsumer = shutdownReasonConsumer;
+    this.syscallCache = syscallCache;
     this.blazeModuleEnvironment = new BlazeModuleEnvironment();
     this.timestampGranularityMonitor = new TimestampGranularityMonitor(runtime.getClock());
     // Record the command's starting time again, for use by
@@ -601,11 +603,6 @@ public class CommandEnvironment {
     return workspaceInfoFromDiff;
   }
 
-  /** Returns the top-down action cache to use, or null. */
-  public TopDownActionCache getTopDownActionCache() {
-    return topDownActionCache;
-  }
-
   public ResourceManager getLocalResourceManager() {
     return ResourceManager.instance();
   }
@@ -732,8 +729,6 @@ public class CommandEnvironment {
 
     outputService = null;
     BlazeModule outputModule = null;
-    topDownActionCache = null;
-    BlazeModule topDownCachingModule = null;
     if (command.builds()) {
       for (BlazeModule module : runtime.getBlazeModules()) {
         OutputService moduleService = module.getOutputService();
@@ -746,18 +741,6 @@ public class CommandEnvironment {
           }
           outputService = moduleService;
           outputModule = module;
-        }
-
-        TopDownActionCache moduleCache = module.getTopDownActionCache();
-        if (moduleCache != null) {
-          if (topDownActionCache != null) {
-            throw new IllegalStateException(
-                String.format(
-                    "More than one module (%s and %s) returns a top down action cache",
-                    module.getClass(), topDownCachingModule.getClass()));
-          }
-          topDownActionCache = moduleCache;
-          topDownCachingModule = module;
         }
       }
     }
@@ -809,10 +792,15 @@ public class CommandEnvironment {
     synchronized (fileCacheLock) {
       if (fileCache == null) {
         fileCache =
-            new SingleBuildFileCache(getExecRoot().getPathString(), getRuntime().getFileSystem());
+            new SingleBuildFileCache(
+                getExecRoot().getPathString(), getRuntime().getFileSystem(), syscallCache);
       }
       return fileCache;
     }
+  }
+
+  public SyscallCache getSyscallCache() {
+    return syscallCache;
   }
 
   /**

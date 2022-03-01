@@ -24,7 +24,6 @@ import com.google.devtools.build.lib.analysis.config.BuildConfigurationCollectio
 import com.google.devtools.build.lib.analysis.config.BuildConfigurationValue;
 import com.google.devtools.build.lib.analysis.config.BuildOptions;
 import com.google.devtools.build.lib.analysis.config.ConfigurationResolver.TopLevelTargetsAndConfigsResult;
-import com.google.devtools.build.lib.analysis.config.FragmentClassSet;
 import com.google.devtools.build.lib.analysis.config.InvalidConfigurationException;
 import com.google.devtools.build.lib.cmdline.Label;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.Immutable;
@@ -34,7 +33,6 @@ import com.google.devtools.build.lib.events.ExtendedEventHandler;
 import com.google.devtools.build.lib.packages.NoSuchPackageException;
 import com.google.devtools.build.lib.packages.NoSuchTargetException;
 import com.google.devtools.build.lib.packages.Target;
-import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
 import com.google.devtools.build.skyframe.SkyFunctionName;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
@@ -59,7 +57,6 @@ import java.util.stream.Collectors;
  */
 @Immutable
 @ThreadSafe
-@AutoCodec
 public final class PrepareAnalysisPhaseValue implements SkyValue {
   private final BuildConfigurationKey hostConfigurationKey;
   private final ImmutableList<BuildConfigurationKey> targetConfigurationKeys;
@@ -154,28 +151,24 @@ public final class PrepareAnalysisPhaseValue implements SkyValue {
   /** Create a prepare analysis phase key. */
   @ThreadSafe
   public static SkyKey key(
-      FragmentClassSet fragments,
       BuildOptions options,
       Set<String> multiCpu,
       Collection<Label> labels) {
-    return new PrepareAnalysisPhaseKey(fragments, options, multiCpu, labels);
+    return new PrepareAnalysisPhaseKey(options, multiCpu, labels);
   }
 
   /** The configuration needed to prepare the analysis phase. */
   @ThreadSafe
   @Immutable
   static final class PrepareAnalysisPhaseKey implements SkyKey {
-    private final FragmentClassSet fragments;
     private final BuildOptions options;
     private final ImmutableSortedSet<String> multiCpu;
     private final ImmutableSet<Label> labels;
 
     private PrepareAnalysisPhaseKey(
-        FragmentClassSet fragments,
         BuildOptions options,
         Set<String> multiCpu,
         Collection<Label> labels) {
-      this.fragments = Preconditions.checkNotNull(fragments);
       this.options = Preconditions.checkNotNull(options);
       this.multiCpu = ImmutableSortedSet.copyOf(multiCpu);
       this.labels = ImmutableSet.copyOf(labels);
@@ -184,10 +177,6 @@ public final class PrepareAnalysisPhaseValue implements SkyValue {
     @Override
     public SkyFunctionName functionName() {
       return SkyFunctions.PREPARE_ANALYSIS_PHASE;
-    }
-
-    public FragmentClassSet getFragments() {
-      return fragments;
     }
 
     public BuildOptions getOptions() {
@@ -205,7 +194,6 @@ public final class PrepareAnalysisPhaseValue implements SkyValue {
     @Override
     public String toString() {
       return MoreObjects.toStringHelper(PrepareAnalysisPhaseKey.class)
-          .add("fragments", fragments)
           .add("optionsDiff", options)
           .add("multiCpu", multiCpu)
           .add("labels", labels)
@@ -214,7 +202,7 @@ public final class PrepareAnalysisPhaseValue implements SkyValue {
 
     @Override
     public int hashCode() {
-      return Objects.hash(fragments, options, multiCpu, labels);
+      return Objects.hash(options, multiCpu, labels);
     }
 
     @Override
@@ -226,8 +214,7 @@ public final class PrepareAnalysisPhaseValue implements SkyValue {
         return false;
       }
       PrepareAnalysisPhaseKey other = (PrepareAnalysisPhaseKey) obj;
-      return other.fragments.equals(this.fragments)
-          && other.options.equals(this.options)
+      return other.options.equals(this.options)
           && other.multiCpu.equals(multiCpu)
           && other.labels.equals(labels);
     }

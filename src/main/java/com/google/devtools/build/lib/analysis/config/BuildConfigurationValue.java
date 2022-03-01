@@ -17,6 +17,7 @@ package com.google.devtools.build.lib.analysis.config;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Suppliers;
 import com.google.common.collect.ImmutableCollection;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSortedMap;
@@ -47,9 +48,10 @@ import com.google.devtools.build.skyframe.SkyValue;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
-import java.util.TreeMap;
 import java.util.function.Supplier;
+import javax.annotation.Nullable;
 import net.starlark.java.annot.StarlarkAnnotations;
 import net.starlark.java.annot.StarlarkBuiltin;
 import net.starlark.java.eval.EvalException;
@@ -82,18 +84,19 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
   private static final Interner<ImmutableSortedMap<Class<? extends Fragment>, Fragment>>
       fragmentsInterner = BlazeInterners.newWeakInterner();
 
-  private static final Interner<ImmutableSortedMap<String, String>> executionInfoInterner =
-      BlazeInterners.newWeakInterner();
-
-  /** Compute the default shell environment for actions from the command line options. */
-  public interface ActionEnvironmentProvider {
+  /** Global state necessary to build a BuildConfiguration. */
+  public interface GlobalStateProvider {
+    /** Computes the default shell environment for actions from the command line options. */
     ActionEnvironment getActionEnvironment(BuildOptions options);
+
+    FragmentRegistry getFragmentRegistry();
+
+    ImmutableSet<String> getReservedActionMnemonics();
   }
 
   private final OutputDirectories outputDirectories;
 
   private final ImmutableSortedMap<Class<? extends Fragment>, Fragment> fragments;
-  private final FragmentClassSet fragmentClassSet;
 
   private final ImmutableMap<String, Class<? extends Fragment>> starlarkVisibleFragments;
   private final RepositoryName mainRepositoryName;
@@ -153,20 +156,59 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
     return ActionEnvironment.split(testEnv);
   }
 
-  public BuildConfigurationValue(
+  // Only BuildConfigurationFunction (and tests for mocking purposes) should instantiate this.
+  public static BuildConfigurationValue create(
+      BuildOptions buildOptions,
+      RepositoryName mainRepositoryName,
+      boolean siblingRepositoryLayout,
+      // Arguments below this are server-global.
+      BlazeDirectories directories,
+      GlobalStateProvider globalProvider,
+      FragmentFactory fragmentFactory)
+      throws InvalidConfigurationException {
+
+    FragmentClassSet fragmentClasses = globalProvider.getFragmentRegistry().getAllFragments();
+    ImmutableSortedMap<Class<? extends Fragment>, Fragment> fragments =
+        getConfigurationFragments(buildOptions, fragmentClasses, fragmentFactory);
+
+    return new BuildConfigurationValue(
+        buildOptions,
+        mainRepositoryName,
+        siblingRepositoryLayout,
+        directories,
+        fragments,
+        globalProvider.getReservedActionMnemonics(),
+        globalProvider.getActionEnvironment(buildOptions));
+  }
+
+  private static ImmutableSortedMap<Class<? extends Fragment>, Fragment> getConfigurationFragments(
+      BuildOptions buildOptions, FragmentClassSet fragmentClasses, FragmentFactory fragmentFactory)
+      throws InvalidConfigurationException {
+    ImmutableSortedMap.Builder<Class<? extends Fragment>, Fragment> fragments =
+        ImmutableSortedMap.orderedBy(FragmentClassSet.LEXICAL_FRAGMENT_SORTER);
+    for (Class<? extends Fragment> fragmentClass : fragmentClasses) {
+      Fragment fragment = fragmentFactory.createFragment(buildOptions, fragmentClass);
+      if (fragment != null) {
+        fragments.put(fragmentClass, fragment);
+      }
+    }
+    return fragments.buildOrThrow();
+  }
+
+  // Package-visible for serialization purposes.
+  BuildConfigurationValue(
+      BuildOptions buildOptions,
+      RepositoryName mainRepositoryName,
+      boolean siblingRepositoryLayout,
+      // Arguments below this are either server-global and constant or completely dependent values.
       BlazeDirectories directories,
       ImmutableMap<Class<? extends Fragment>, Fragment> fragments,
-      FragmentClassSet fragmentClassSet,
-      BuildOptions buildOptions,
       ImmutableSet<String> reservedActionMnemonics,
-      ActionEnvironment actionEnvironment,
-      RepositoryName mainRepositoryName,
-      boolean siblingRepositoryLayout)
+      ActionEnvironment actionEnvironment)
       throws InvalidMnemonicException {
     this.fragments =
         fragmentsInterner.intern(
             ImmutableSortedMap.copyOf(fragments, FragmentClassSet.LEXICAL_FRAGMENT_SORTER));
-    this.fragmentClassSet = fragmentClassSet;
     this.starlarkVisibleFragments = buildIndexOfStarlarkVisibleFragments();
     this.buildOptions = buildOptions;
     this.options = buildOptions.get(CoreOptions.class);
@@ -191,11 +233,8 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
     // We can't use an ImmutableMap.Builder here; we need the ability to add entries with keys that
     // are already in the map so that the same define can be specified on the command line twice,
     // and ImmutableMap.Builder does not support that.
-    Map<String, String> commandLineDefinesBuilder = new TreeMap<>();
-    for (Map.Entry<String, String> define : options.commandLineBuildVariables) {
-      commandLineDefinesBuilder.put(define.getKey(), define.getValue());
-    }
-    commandLineBuildVariables = ImmutableMap.copyOf(commandLineDefinesBuilder);
+    commandLineBuildVariables =
+        ImmutableMap.copyOf(options.getNormalizedCommandLineBuildVariables());
 
     this.actionEnv = actionEnvironment;
     this.testEnv = setupTestEnvironment();
@@ -221,6 +260,26 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
     this.commandLineLimits = new CommandLineLimits(options.minParamFileSize);
   }
 
+  @Override
+  public boolean equals(Object other) {
+    if (this == other) {
+      return true;
+    }
+    if (!(other instanceof BuildConfigurationValue)) {
+      return false;
+    }
+    // Only considering arguments that are non-dependent and non-server-global.
+    BuildConfigurationValue otherVal = (BuildConfigurationValue) other;
+    return this.buildOptions.equals(otherVal.buildOptions)
+        && this.mainRepositoryName.equals(otherVal.mainRepositoryName)
+        && this.siblingRepositoryLayout == otherVal.siblingRepositoryLayout;
+  }
+
+  @Override
+  public int hashCode() {
+    return Objects.hash(buildOptions, mainRepositoryName, siblingRepositoryLayout);
+  }
+
   private ImmutableMap<String, Class<? extends Fragment>> buildIndexOfStarlarkVisibleFragments() {
     ImmutableMap.Builder<String, Class<? extends Fragment>> builder = ImmutableMap.builder();
 
@@ -230,7 +289,7 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
         builder.put(module.name(), fragmentClass);
       }
     }
-    return builder.build();
+    return builder.buildOrThrow();
   }
 
   /**
@@ -241,7 +300,7 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
    * again.
    */
   public BuildConfigurationKey getKey() {
-    return BuildConfigurationKey.withoutPlatformMapping(fragmentClassSet, buildOptions);
+    return BuildConfigurationKey.withoutPlatformMapping(buildOptions);
   }
 
   /** Retrieves the {@link BuildOptionDetails} containing data on this configuration's options. */
@@ -523,11 +582,6 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
     return outputDirectories.getDirectories();
   }
 
-  /** Which fragments does this configuration contain? */
-  public FragmentClassSet fragmentClasses() {
-    return fragmentClassSet;
-  }
-
   /** Returns true if non-functional build stamps are enabled. */
   public boolean stampBinaries() {
     return options.stampBinaries;
@@ -613,6 +667,18 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
     return isExecConfiguration() || isHostConfiguration();
   }
 
+  @Override
+  public boolean isToolConfigurationForStarlark(StarlarkThread thread) throws EvalException {
+    RepositoryName repository =
+        BazelModuleContext.of(Module.ofInnermostEnclosingStarlarkFunction(thread))
+            .label()
+            .getRepository();
+    if (!"@_builtins".equals(repository.getName())) {
+      throw Starlark.errorf("private API only for use in builtins");
+    }
+    return isToolConfiguration();
+  }
+
   public boolean checkVisibility() {
     return options.checkVisibility;
   }
@@ -638,7 +704,7 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
   }
 
   public List<Label> getActionListeners() {
-    return options.actionListeners;
+    return options.actionListeners == null ? ImmutableList.of() : options.actionListeners;
   }
 
   /**
@@ -737,7 +803,7 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
     }
     Map<String, String> mutableCopy = new HashMap<>(executionInfo);
     modifyExecutionInfo(mutableCopy, mnemonic);
-    return executionInfoInterner.intern(ImmutableSortedMap.copyOf(mutableCopy));
+    return ImmutableSortedMap.copyOf(mutableCopy);
   }
 
   /** Applies {@code executionInfoModifiers} to the given {@code executionInfo}. */
@@ -766,6 +832,7 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
     return options.autoCpuEnvironmentGroup;
   }
 
+  @Nullable
   public Class<? extends Fragment> getStarlarkFragmentByName(String name) {
     return starlarkVisibleFragments.get(name);
   }
@@ -794,6 +861,7 @@ public class BuildConfigurationValue implements BuildConfigurationApi, SkyValue 
                 .setPlatformName(getCpu())
                 .putAllMakeVariable(getMakeEnvironment())
                 .setCpu(getCpu())
+                .setIsTool(isToolConfiguration())
                 .build());
     return new BuildConfigurationEvent(eventId, builder.build());
   }

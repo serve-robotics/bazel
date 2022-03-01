@@ -13,20 +13,29 @@
 // limitations under the License.
 package com.google.devtools.build.lib.skyframe;
 
+
 import com.google.common.base.Preconditions;
+import com.google.common.base.Supplier;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
+import com.google.devtools.build.lib.actions.ActionAnalysisMetadata;
 import com.google.devtools.build.lib.actions.ActionLookupKey;
+import com.google.devtools.build.lib.actions.ActionLookupValue;
 import com.google.devtools.build.lib.actions.Artifact;
 import com.google.devtools.build.lib.analysis.AspectValue;
 import com.google.devtools.build.lib.analysis.ConfiguredTarget;
 import com.google.devtools.build.lib.analysis.ConfiguredTargetValue;
 import com.google.devtools.build.lib.analysis.ExtraActionArtifactsProvider;
 import com.google.devtools.build.lib.analysis.TopLevelArtifactContext;
+import com.google.devtools.build.lib.concurrent.Sharder;
+import com.google.devtools.build.lib.profiler.Profiler;
+import com.google.devtools.build.lib.profiler.SilentCloseable;
+import com.google.devtools.build.lib.skyframe.ArtifactConflictFinder.ConflictException;
 import com.google.devtools.build.lib.skyframe.AspectCompletionValue.AspectCompletionKey;
-import com.google.devtools.build.lib.skyframe.ToplevelStarlarkAspectFunction.TopLevelAspectsValue;
 import com.google.devtools.build.lib.util.RegexFilter;
 import com.google.devtools.build.skyframe.SkyFunction;
+import com.google.devtools.build.skyframe.SkyFunction.Environment.SkyKeyComputeState;
 import com.google.devtools.build.skyframe.SkyFunctionException;
 import com.google.devtools.build.skyframe.SkyKey;
 import com.google.devtools.build.skyframe.SkyValue;
@@ -39,7 +48,19 @@ import javax.annotation.Nullable;
  * Drives the analysis & execution of an ActionLookupKey, which is wrapped inside a BuildDriverKey.
  */
 public class BuildDriverFunction implements SkyFunction {
+  private final TransitiveActionLookupValuesCollector transitiveActionLookupValuesCollector;
+  private final Supplier<IncrementalArtifactConflictFinder> incrementalArtifactConflictFinder;
 
+  BuildDriverFunction(
+      TransitiveActionLookupValuesCollector transitiveActionLookupValuesCollector,
+      Supplier<IncrementalArtifactConflictFinder> incrementalArtifactConflictFinder) {
+    this.transitiveActionLookupValuesCollector = transitiveActionLookupValuesCollector;
+    this.incrementalArtifactConflictFinder = incrementalArtifactConflictFinder;
+  }
+
+  private static class State implements SkyKeyComputeState {
+    private ImmutableMap<ActionAnalysisMetadata, ConflictException> actionConflicts;
+  }
   /**
    * From the ConfiguredTarget/Aspect keys, get the top-level artifacts. Then evaluate them together
    * with the appropriate CompletionFunctions. This is the bridge between the conceptual analysis &
@@ -51,17 +72,39 @@ public class BuildDriverFunction implements SkyFunction {
   @Override
   public SkyValue compute(SkyKey skyKey, Environment env)
       throws SkyFunctionException, InterruptedException {
-    ActionLookupKey actionLookupKey = ((BuildDriverKey) skyKey).getActionLookupKey();
-    TopLevelArtifactContext topLevelArtifactContext =
-        ((BuildDriverKey) skyKey).getTopLevelArtifactContext();
+    BuildDriverKey buildDriverKey = (BuildDriverKey) skyKey;
+    ActionLookupKey actionLookupKey = buildDriverKey.getActionLookupKey();
+    TopLevelArtifactContext topLevelArtifactContext = buildDriverKey.getTopLevelArtifactContext();
+    State state = env.getState(State::new);
+
+    // Register a dependency on the BUILD_ID. We do this to make sure BuildDriverFunction is
+    // reevaluated every build.
+    PrecomputedValue.BUILD_ID.get(env);
 
     // Why SkyValue and not ActionLookupValue? The evaluation of some ActionLookupKey can result in
-    // classes that don't implement
-    // ActionLookupValue (e.g. ConfiguredTargetKey -> NonRuleConfiguredTargetValue).
+    // classes that don't implement ActionLookupValue
+    // (e.g. ConfiguredTargetKey -> NonRuleConfiguredTargetValue).
     SkyValue topLevelSkyValue = env.getValue(actionLookupKey);
 
     if (env.valuesMissing()) {
       return null;
+    }
+
+    // Unconditionally check for action conflicts.
+    // TODO(b/214371092): Only check when necessary.
+    try (SilentCloseable c =
+        Profiler.instance().profile("BuildDriverFunction.checkActionConflicts")) {
+      if (state.actionConflicts == null) {
+        state.actionConflicts =
+            checkActionConflicts(actionLookupKey, buildDriverKey.strictActionConflictCheck());
+      }
+      if (!state.actionConflicts.isEmpty()) {
+        throw new BuildDriverFunctionException(
+            new TopLevelConflictException(
+                "Action conflict(s) detected while analyzing top-level target "
+                    + actionLookupKey.getLabel(),
+                state.actionConflicts));
+      }
     }
     ImmutableSet.Builder<Artifact> artifactsToBuild = ImmutableSet.builder();
 
@@ -79,7 +122,7 @@ public class BuildDriverFunction implements SkyFunction {
               Collections.singletonList(
                   TargetCompletionValue.key(
                       (ConfiguredTargetKey) actionLookupKey, topLevelArtifactContext, false))));
-    } else if (topLevelSkyValue instanceof TopLevelAspectsValue) {
+    } else {
       List<SkyKey> aspectCompletionKeys = new ArrayList<>();
       for (SkyValue aspectValue :
           ((TopLevelAspectsValue) topLevelSkyValue).getTopLevelAspectsValues()) {
@@ -95,17 +138,16 @@ public class BuildDriverFunction implements SkyFunction {
       env.getValues(Iterables.concat(artifactsToBuild.build(), aspectCompletionKeys));
     }
 
-    if (env.valuesMissing()) {
-      return null;
-    }
-
-    return new BuildDriverValue(topLevelSkyValue);
+    return env.valuesMissing() ? null : new BuildDriverValue(topLevelSkyValue);
   }
 
-  @Nullable
-  @Override
-  public String extractTag(SkyKey skyKey) {
-    return null;
+  private ImmutableMap<ActionAnalysisMetadata, ConflictException> checkActionConflicts(
+      ActionLookupKey actionLookupKey, boolean strictConflictCheck) throws InterruptedException {
+    return incrementalArtifactConflictFinder
+        .get()
+        .findArtifactConflicts(
+            transitiveActionLookupValuesCollector.collect(actionLookupKey), strictConflictCheck)
+        .getConflicts();
   }
 
   private void addExtraActionsIfRequested(
@@ -125,5 +167,18 @@ public class BuildDriverFunction implements SkyFunction {
         builder.add(artifact);
       }
     }
+  }
+
+  /** A SkyFunctionException wrapper for the actual TopLevelConflictException. */
+  private static final class BuildDriverFunctionException extends SkyFunctionException {
+    // The exception is transient here since it could be caused by external factors (conflict with
+    // another target).
+    BuildDriverFunctionException(TopLevelConflictException cause) {
+      super(cause, Transience.TRANSIENT);
+    }
+  }
+
+  interface TransitiveActionLookupValuesCollector {
+    Sharder<ActionLookupValue> collect(ActionLookupKey key) throws InterruptedException;
   }
 }

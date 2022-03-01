@@ -29,7 +29,8 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.ListeningExecutorService;
 import com.google.devtools.build.lib.cmdline.LabelValidator.BadLabelException;
 import com.google.devtools.build.lib.cmdline.LabelValidator.PackageAndTarget;
-import com.google.devtools.build.lib.concurrent.BatchCallback;
+import com.google.devtools.build.lib.io.InconsistentFilesystemException;
+import com.google.devtools.build.lib.io.ProcessPackageDirectoryException;
 import com.google.devtools.build.lib.server.FailureDetails.TargetPatterns;
 import com.google.devtools.build.lib.server.FailureDetails.TargetPatterns.Code;
 import com.google.devtools.build.lib.supplier.InterruptibleSupplier;
@@ -131,9 +132,7 @@ public abstract class TargetPattern {
    */
   public abstract Type getType();
 
-  /**
-   * Return the string that was parsed into this pattern.
-   */
+  /** Return the string that was parsed into this pattern. */
   public String getOriginalPattern() {
     return originalPattern;
   }
@@ -142,17 +141,24 @@ public abstract class TargetPattern {
    * Evaluates the current target pattern, excluding targets under directories in both {@code
    * ignoredSubdirectories} and {@code excludedSubdirectories}, and returns the result.
    *
+   * @throws InconsistentFilesystemException if {@code resolver} makes Skyframe calls and discovers
+   *     a filesystem inconsistency as observed by Skyframe, and this pattern does not have type
+   *     {@code Type.TARGETS_BELOW_DIRECTORY}
+   * @throws ProcessPackageDirectoryException if {@code resolver} makes Skyframe calls and discovers
+   *     a filesystem inconsistency as observed by Skyframe, and this pattern has type {@code
+   *     Type.TARGETS_BELOW_DIRECTORY}
    * @throws IllegalArgumentException if either {@code ignoredSubdirectories} or {@code
    *     excludedSubdirectories} is nonempty and this pattern does not have type {@code
    *     Type.TARGETS_BELOW_DIRECTORY}.
    */
-  public abstract <T, E extends Exception> void eval(
+  public abstract <T, E extends Exception & QueryExceptionMarkerInterface> void eval(
       TargetPatternResolver<T> resolver,
       InterruptibleSupplier<ImmutableSet<PathFragment>> ignoredSubdirectories,
       ImmutableSet<PathFragment> excludedSubdirectories,
       BatchCallback<T, E> callback,
       Class<E> exceptionClass)
-      throws TargetParsingException, E, InterruptedException;
+      throws TargetParsingException, E, InterruptedException, ProcessPackageDirectoryException,
+          InconsistentFilesystemException;
 
   /**
    * Evaluates this {@link TargetPattern} synchronously, feeding the result to the given {@code
@@ -161,18 +167,26 @@ public abstract class TargetPattern {
    * <p>If the returned {@link ListenableFuture}'s {@link ListenableFuture#get} throws an {@code
    * ExecutionException}, the cause will be an instance of either {@link TargetParsingException} or
    * the given {@code exceptionClass}.
+   *
+   * <p>This method must not be called from within Skyframe evaluation. Use {@link
+   * com.google.devtools.build.lib.skyframe.TargetPatternFunction} and friends for that.
    */
-  public final <T, E extends Exception> ListenableFuture<Void> evalAdaptedForAsync(
-      TargetPatternResolver<T> resolver,
-      InterruptibleSupplier<ImmutableSet<PathFragment>> ignoredSubdirectories,
-      ImmutableSet<PathFragment> excludedSubdirectories,
-      BatchCallback<T, E> callback,
-      Class<E> exceptionClass) {
+  public final <T, E extends Exception & QueryExceptionMarkerInterface>
+      ListenableFuture<Void> evalAdaptedForAsync(
+          TargetPatternResolver<T> resolver,
+          InterruptibleSupplier<ImmutableSet<PathFragment>> ignoredSubdirectories,
+          ImmutableSet<PathFragment> excludedSubdirectories,
+          BatchCallback<T, E> callback,
+          Class<E> exceptionClass) {
     try {
       eval(resolver, ignoredSubdirectories, excludedSubdirectories, callback, exceptionClass);
       return Futures.immediateFuture(null);
     } catch (TargetParsingException e) {
       return Futures.immediateFailedFuture(e);
+    } catch (ProcessPackageDirectoryException | InconsistentFilesystemException e) {
+      throw new IllegalStateException(
+          "Cannot throw filesystem-related exceptions outside of Skyframe evaluation for " + this,
+          e);
     } catch (InterruptedException e) {
       return immediateCancelledFuture();
     } catch (Exception e) {
@@ -191,7 +205,7 @@ public abstract class TargetPattern {
    * ExecutionException}, the cause will be an instance of either {@link TargetParsingException} or
    * the given {@code exceptionClass}.
    */
-  public <T, E extends Exception> ListenableFuture<Void> evalAsync(
+  public <T, E extends Exception & QueryExceptionMarkerInterface> ListenableFuture<Void> evalAsync(
       TargetPatternResolver<T> resolver,
       InterruptibleSupplier<ImmutableSet<PathFragment>> ignoredSubdirectories,
       ImmutableSet<PathFragment> excludedSubdirectories,
@@ -205,8 +219,8 @@ public abstract class TargetPattern {
   /**
    * For patterns of type {@link Type#PATH_AS_TARGET}, returns the path in question.
    *
-   * <p>The interpretation of this path, of course, depends on the existence of packages.
-   * See {@link InterpretPathAsTarget#eval}.
+   * <p>The interpretation of this path, of course, depends on the existence of packages. See {@link
+   * InterpretPathAsTarget#eval}.
    */
   public String getPathForPathAsTarget() {
     throw new IllegalStateException();
@@ -240,9 +254,8 @@ public abstract class TargetPattern {
   public abstract RepositoryName getRepository();
 
   /**
-   * Returns {@code true} iff this pattern has type {@code Type.TARGETS_BELOW_DIRECTORY} or
-   * {@code Type.TARGETS_IN_PACKAGE} and the target pattern suffix specified it should match
-   * rules only.
+   * Returns {@code true} iff this pattern has type {@code Type.TARGETS_BELOW_DIRECTORY} or {@code
+   * Type.TARGETS_IN_PACKAGE} and the target pattern suffix specified it should match rules only.
    */
   public abstract boolean getRulesOnly();
 
@@ -258,7 +271,7 @@ public abstract class TargetPattern {
     }
 
     @Override
-    public <T, E extends Exception> void eval(
+    public <T, E extends Exception & QueryExceptionMarkerInterface> void eval(
         TargetPatternResolver<T> resolver,
         InterruptibleSupplier<ImmutableSet<PathFragment>> ignoredSubdirectories,
         ImmutableSet<PathFragment> excludedSubdirectories,
@@ -320,18 +333,17 @@ public abstract class TargetPattern {
     }
 
     @Override
-    public <T, E extends Exception> void eval(
+    public <T, E extends Exception & QueryExceptionMarkerInterface> void eval(
         TargetPatternResolver<T> resolver,
         InterruptibleSupplier<ImmutableSet<PathFragment>> ignoredSubdirectories,
         ImmutableSet<PathFragment> excludedSubdirectories,
         BatchCallback<T, E> callback,
         Class<E> exceptionClass)
-        throws TargetParsingException, E, InterruptedException {
+        throws TargetParsingException, E, InterruptedException, InconsistentFilesystemException {
       if (resolver.isPackage(PackageIdentifier.createInMainRepo(path))) {
         // User has specified a package name. lookout for default target.
         callback.process(resolver.getExplicitTarget(label("//" + path)).getTargets());
       } else {
-
         List<String> pieces = SLASH_SPLITTER.splitToList(path);
 
         // Interprets the label as a file target.  This loop stops as soon as the
@@ -350,7 +362,7 @@ public abstract class TargetPattern {
 
         throw new TargetParsingException(
             "couldn't determine target from filename '" + path + "'",
-            TargetPatterns.Code.CANNOT_DETERMINE_TARGET_FROM_FILENAME);
+            Code.CANNOT_DETERMINE_TARGET_FROM_FILENAME);
       }
     }
 
@@ -409,7 +421,6 @@ public abstract class TargetPattern {
         boolean rulesOnly,
         boolean checkWildcardConflict) {
       super(originalPattern);
-      Preconditions.checkArgument(!packageIdentifier.getRepository().isDefault());
       this.packageIdentifier = packageIdentifier;
       this.suffix = Preconditions.checkNotNull(suffix);
       this.wasOriginallyAbsolute = wasOriginallyAbsolute;
@@ -418,13 +429,13 @@ public abstract class TargetPattern {
     }
 
     @Override
-    public <T, E extends Exception> void eval(
+    public <T, E extends Exception & QueryExceptionMarkerInterface> void eval(
         TargetPatternResolver<T> resolver,
         InterruptibleSupplier<ImmutableSet<PathFragment>> ignoredSubdirectories,
         ImmutableSet<PathFragment> excludedSubdirectories,
         BatchCallback<T, E> callback,
         Class<E> exceptionClass)
-        throws TargetParsingException, E, InterruptedException {
+        throws TargetParsingException, E, InterruptedException, InconsistentFilesystemException {
       if (checkWildcardConflict) {
         ResolvedTargets<T> targets = getWildcardConflict(resolver);
         if (targets != null) {
@@ -494,7 +505,7 @@ public abstract class TargetPattern {
      *     is such a target. Otherwise, return null.
      */
     private <T> ResolvedTargets<T> getWildcardConflict(TargetPatternResolver<T> resolver)
-        throws InterruptedException {
+        throws InconsistentFilesystemException, InterruptedException {
       if (!wasOriginallyAbsolute) {
         return null;
       }
@@ -509,11 +520,12 @@ public abstract class TargetPattern {
       }
 
       if (target != null) {
-        resolver.warn(String.format("The target pattern '%s' is ambiguous: '%s' is " +
-                                    "both a wildcard, and the name of an existing %s; " +
-                                    "using the latter interpretation",
-                                    getOriginalPattern(), ":" + suffix,
-                                    resolver.getTargetKind(target)));
+        resolver.warn(
+            String.format(
+                "The target pattern '%s' is ambiguous: '%s' is "
+                    + "both a wildcard, and the name of an existing %s; "
+                    + "using the latter interpretation",
+                getOriginalPattern(), ":" + suffix, resolver.getTargetKind(target)));
         try {
           return resolver.getExplicitTarget(label);
         } catch (TargetParsingException e) {
@@ -538,19 +550,18 @@ public abstract class TargetPattern {
     private TargetsBelowDirectory(
         String originalPattern, PackageIdentifier directory, boolean rulesOnly) {
       super(originalPattern);
-      Preconditions.checkArgument(!directory.getRepository().isDefault());
       this.directory = Preconditions.checkNotNull(directory);
       this.rulesOnly = rulesOnly;
     }
 
     @Override
-    public <T, E extends Exception> void eval(
+    public <T, E extends Exception & QueryExceptionMarkerInterface> void eval(
         TargetPatternResolver<T> resolver,
         InterruptibleSupplier<ImmutableSet<PathFragment>> ignoredSubdirectories,
         ImmutableSet<PathFragment> excludedSubdirectories,
         BatchCallback<T, E> callback,
         Class<E> exceptionClass)
-        throws TargetParsingException, E, InterruptedException {
+        throws TargetParsingException, E, InterruptedException, ProcessPackageDirectoryException {
       Preconditions.checkState(
           !excludedSubdirectories.contains(directory.getPackageFragment()),
           "Fully excluded target pattern %s should have already been filtered out (%s)",
@@ -573,13 +584,14 @@ public abstract class TargetPattern {
     }
 
     @Override
-    public <T, E extends Exception> ListenableFuture<Void> evalAsync(
-        TargetPatternResolver<T> resolver,
-        InterruptibleSupplier<ImmutableSet<PathFragment>> ignoredSubdirectories,
-        ImmutableSet<PathFragment> excludedSubdirectories,
-        BatchCallback<T, E> callback,
-        Class<E> exceptionClass,
-        ListeningExecutorService executor) {
+    public <T, E extends Exception & QueryExceptionMarkerInterface>
+        ListenableFuture<Void> evalAsync(
+            TargetPatternResolver<T> resolver,
+            InterruptibleSupplier<ImmutableSet<PathFragment>> ignoredSubdirectories,
+            ImmutableSet<PathFragment> excludedSubdirectories,
+            BatchCallback<T, E> callback,
+            Class<E> exceptionClass,
+            ListeningExecutorService executor) {
       Preconditions.checkState(
           !excludedSubdirectories.contains(directory.getPackageFragment()),
           "Fully excluded target pattern %s should have already been filtered out (%s)",
@@ -830,11 +842,12 @@ public abstract class TargetPattern {
     private static final List<String> SUFFIXES;
 
     static {
-      SUFFIXES = ImmutableList.<String>builder()
-          .addAll(ALL_RULES_IN_SUFFIXES)
-          .addAll(ALL_TARGETS_IN_SUFFIXES)
-          .add("/...")
-          .build();
+      SUFFIXES =
+          ImmutableList.<String>builder()
+              .addAll(ALL_RULES_IN_SUFFIXES)
+              .addAll(ALL_TARGETS_IN_SUFFIXES)
+              .add("/...")
+              .build();
     }
 
     /**
@@ -938,7 +951,7 @@ public abstract class TargetPattern {
       String targetPart = colonIndex < 0 ? "" : pattern.substring(colonIndex + 1);
 
       if (packagePart.equals("...")) {
-        packagePart = "/...";  // special case this for easier parsing
+        packagePart = "/..."; // special case this for easier parsing
       }
 
       if (packagePart.endsWith("/")) {
@@ -951,8 +964,8 @@ public abstract class TargetPattern {
         String realPackagePart = packagePart.substring(0, packagePart.length() - "/...".length());
         PackageIdentifier packageIdentifier;
         try {
-          packageIdentifier = PackageIdentifier.parse(
-              repository.getName() + "//" + realPackagePart);
+          packageIdentifier =
+              PackageIdentifier.parse(repository.getName() + "//" + realPackagePart);
         } catch (LabelSyntaxException e) {
           throw new TargetParsingException(
               "Invalid package name '" + realPackagePart + "': " + e.getMessage(),
@@ -1077,9 +1090,7 @@ public abstract class TargetPattern {
     }
   }
 
-  /**
-   * The target pattern type (targets below package, in package, explicit target, etc.)
-   */
+  /** The target pattern type (targets below package, in package, explicit target, etc.) */
   public enum Type {
     /** A path interpreted as a target, eg "foo/bar/baz" */
     PATH_AS_TARGET,

@@ -26,6 +26,7 @@ import com.google.common.base.Predicates;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.eventbus.EventBus;
 import com.google.devtools.build.lib.actions.AbstractAction;
@@ -91,13 +92,13 @@ import com.google.devtools.build.lib.vfs.FileStatus;
 import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.Root;
-import com.google.devtools.build.lib.vfs.UnixGlob;
+import com.google.devtools.build.lib.vfs.SyscallCache;
 import com.google.devtools.build.lib.vfs.inmemoryfs.InMemoryFileSystem;
 import com.google.devtools.build.skyframe.AbstractSkyFunctionEnvironment;
-import com.google.devtools.build.skyframe.BuildDriver;
 import com.google.devtools.build.skyframe.ErrorInfo;
 import com.google.devtools.build.skyframe.EvaluationContext;
 import com.google.devtools.build.skyframe.EvaluationResult;
+import com.google.devtools.build.skyframe.MemoizingEvaluator;
 import com.google.devtools.build.skyframe.SkyFunction;
 import com.google.devtools.build.skyframe.SkyFunctionName;
 import com.google.devtools.build.skyframe.SkyKey;
@@ -119,6 +120,7 @@ import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
@@ -162,7 +164,8 @@ public final class ActionsTestUtil {
       Map<String, String> clientEnv) {
     return new ActionExecutionContext(
         executor,
-        new SingleBuildFileCache(execRoot.getPathString(), execRoot.getFileSystem()),
+        new SingleBuildFileCache(
+            execRoot.getPathString(), execRoot.getFileSystem(), SyscallCache.NO_CACHE),
         ActionInputPrefetcher.NONE,
         actionKeyContext,
         metadataHandler,
@@ -176,7 +179,7 @@ public final class ActionsTestUtil {
         /*actionFileSystem=*/ null,
         /*skyframeDepsResult=*/ null,
         DiscoveredModulesPruner.DEFAULT,
-        UnixGlob.DEFAULT_SYSCALLS,
+        SyscallCache.NO_CACHE,
         ThreadStateReceiver.NULL_INSTANCE);
   }
 
@@ -202,7 +205,7 @@ public final class ActionsTestUtil {
         /*actionFileSystem=*/ null,
         /*skyframeDepsResult=*/ null,
         DiscoveredModulesPruner.DEFAULT,
-        UnixGlob.DEFAULT_SYSCALLS,
+        SyscallCache.NO_CACHE,
         ThreadStateReceiver.NULL_INSTANCE);
   }
 
@@ -213,11 +216,12 @@ public final class ActionsTestUtil {
       FileOutErr fileOutErr,
       Path execRoot,
       MetadataHandler metadataHandler,
-      BuildDriver buildDriver,
+      MemoizingEvaluator evaluator,
       DiscoveredModulesPruner discoveredModulesPruner) {
     return ActionExecutionContext.forInputDiscovery(
         executor,
-        new SingleBuildFileCache(execRoot.getPathString(), execRoot.getFileSystem()),
+        new SingleBuildFileCache(
+            execRoot.getPathString(), execRoot.getFileSystem(), SyscallCache.NO_CACHE),
         ActionInputPrefetcher.NONE,
         actionKeyContext,
         metadataHandler,
@@ -226,10 +230,10 @@ public final class ActionsTestUtil {
         fileOutErr,
         eventHandler,
         ImmutableMap.of(),
-        new BlockingSkyFunctionEnvironment(buildDriver, eventHandler),
+        new BlockingSkyFunctionEnvironment(evaluator, eventHandler),
         /*actionFileSystem=*/ null,
         discoveredModulesPruner,
-        UnixGlob.DEFAULT_SYSCALLS,
+        SyscallCache.NO_CACHE,
         ThreadStateReceiver.NULL_INSTANCE);
   }
 
@@ -317,12 +321,13 @@ public final class ActionsTestUtil {
    * {@link SkyFunction.Environment} that internally makes a full Skyframe evaluate call for the
    * requested keys, blocking until the values are ready.
    */
-  private static class BlockingSkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
-    private final BuildDriver driver;
+  private static final class BlockingSkyFunctionEnvironment extends AbstractSkyFunctionEnvironment {
+    private final MemoizingEvaluator evaluator;
     private final EventHandler eventHandler;
 
-    private BlockingSkyFunctionEnvironment(BuildDriver driver, EventHandler eventHandler) {
-      this.driver = driver;
+    private BlockingSkyFunctionEnvironment(
+        MemoizingEvaluator evaluator, EventHandler eventHandler) {
+      this.evaluator = evaluator;
       this.eventHandler = eventHandler;
     }
 
@@ -338,7 +343,7 @@ public final class ActionsTestUtil {
                 .setNumThreads(ResourceUsage.getAvailableProcessors())
                 .setEventHandler(new Reporter(new EventBus(), eventHandler))
                 .build();
-        evaluationResult = driver.evaluate(depKeys, evaluationContext);
+        evaluationResult = evaluator.evaluate(depKeys, evaluationContext);
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
         for (SkyKey key : depKeys) {
@@ -366,7 +371,8 @@ public final class ActionsTestUtil {
     @Override
     protected List<ValueOrUntypedException> getOrderedValueOrUntypedExceptions(
         Iterable<? extends SkyKey> depKeys) {
-      throw new UnsupportedOperationException();
+      Map<SkyKey, ValueOrUntypedException> mapResult = getValueOrUntypedExceptions(depKeys);
+      return ImmutableList.copyOf(Iterables.transform(depKeys, mapResult::get));
     }
 
     @Override
@@ -375,13 +381,23 @@ public final class ActionsTestUtil {
     }
 
     @Override
-    public boolean inErrorBubblingForTesting() {
+    public void registerDependencies(Iterable<SkyKey> keys) {
+      throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean inErrorBubblingForSkyFunctionsThatCanFullyRecoverFromErrors() {
       return false;
     }
 
     @Override
     public boolean restartPermitted() {
       return false;
+    }
+
+    @Override
+    public <T extends SkyKeyComputeState> T getState(Supplier<T> stateSupplier) {
+      return stateSupplier.get();
     }
   }
 
@@ -447,9 +463,7 @@ public final class ActionsTestUtil {
     }
   }
 
-  /**
-   * A dummy Action class for use in tests.
-   */
+  /** A dummy Action class for use in tests. */
   public static class NullAction extends AbstractAction {
 
     public NullAction() {
@@ -566,8 +580,8 @@ public final class ActionsTestUtil {
   }
 
   /**
-   * For a bunch of actions, gets the basenames of the paths and accumulates
-   * them in a space separated string, like <code>foo.o bar.o baz.a</code>.
+   * For a bunch of actions, gets the basenames of the paths and accumulates them in a space
+   * separated string, like <code>foo.o bar.o baz.a</code>.
    */
   public static String baseNamesOf(Iterable<Artifact> artifacts) {
     List<String> baseNames = baseArtifactNames(artifacts);
@@ -583,9 +597,8 @@ public final class ActionsTestUtil {
   }
 
   /**
-   * For a bunch of actions, gets the basenames of the paths, sorts them in alphabetical
-   * order and accumulates them in a space separated string, for example
-   * <code>bar.o baz.a foo.o</code>.
+   * For a bunch of actions, gets the basenames of the paths, sorts them in alphabetical order and
+   * accumulates them in a space separated string, for example <code>bar.o baz.a foo.o</code>.
    */
   public static String sortedBaseNamesOf(Iterable<Artifact> artifacts) {
     List<String> baseNames = baseArtifactNames(artifacts);
@@ -676,9 +689,7 @@ public final class ActionsTestUtil {
     return baseArtifactNames(FileType.filter(artifactClosureOf(artifacts), types));
   }
 
-  /**
-   * Returns the closure over the input files of an action.
-   */
+  /** Returns the closure over the input files of an action. */
   public Set<Artifact> inputClosureOf(ActionAnalysisMetadata action) {
     return artifactClosureOf(action.getInputs().toList());
   }
@@ -776,9 +787,7 @@ public final class ActionsTestUtil {
     ActionAnalysisMetadata action = actionGraph.getGeneratingAction(a);
     if (action != null) {
       Preconditions.checkState(
-          action instanceof Action,
-          "%s is not a proper Action object",
-          action.prettyPrint());
+          action instanceof Action, "%s is not a proper Action object", action.prettyPrint());
       return (Action) action;
     } else {
       return null;
@@ -836,8 +845,8 @@ public final class ActionsTestUtil {
   }
 
   /**
-   * Returns the first artifact which is an input to "action" and has the
-   * specified basename. An assertion error is raised if none is found.
+   * Returns the first artifact which is an input to "action" and has the specified basename. An
+   * assertion error is raised if none is found.
    */
   public static Artifact getInput(ActionAnalysisMetadata action, String basename) {
     for (Artifact artifact : action.getInputs().toList()) {
@@ -848,10 +857,7 @@ public final class ActionsTestUtil {
     throw new AssertionError("No input with basename '" + basename + "' in action " + action);
   }
 
-  /**
-   * Returns true if an artifact that is an input to "action" with the specific
-   * basename exists.
-   */
+  /** Returns true if an artifact that is an input to "action" with the specific basename exists. */
   public static boolean hasInput(ActionAnalysisMetadata action, String basename) {
     try {
       getInput(action, basename);
@@ -862,8 +868,8 @@ public final class ActionsTestUtil {
   }
 
   /**
-   * Returns the first artifact which is an output of "action" and has the
-   * specified basename. An assertion error is raised if none is found.
+   * Returns the first artifact which is an output of "action" and has the specified basename. An
+   * assertion error is raised if none is found.
    */
   public static Artifact getOutput(ActionAnalysisMetadata action, String basename) {
     for (Artifact artifact : action.getOutputs()) {
@@ -910,10 +916,8 @@ public final class ActionsTestUtil {
     public Iterable<MissDetail> build() {
       List<MissDetail> result = new ArrayList<>(details.size());
       for (Map.Entry<MissReason, Integer> entry : details.entrySet()) {
-        MissDetail detail = MissDetail.newBuilder()
-            .setReason(entry.getKey())
-            .setCount(entry.getValue())
-            .build();
+        MissDetail detail =
+            MissDetail.newBuilder().setReason(entry.getKey()).setCount(entry.getValue()).build();
         result.add(detail);
       }
       return result;
@@ -923,8 +927,8 @@ public final class ActionsTestUtil {
   /**
    * An {@link ArtifactResolver} all of whose operations throw an exception.
    *
-   * <p>This is to be used as a base class by other test programs that need to implement only a
-   * few of the hooks required by the scenario under test.
+   * <p>This is to be used as a base class by other test programs that need to implement only a few
+   * of the hooks required by the scenario under test.
    */
   public static class FakeArtifactResolverBase implements ArtifactResolver {
     @Override

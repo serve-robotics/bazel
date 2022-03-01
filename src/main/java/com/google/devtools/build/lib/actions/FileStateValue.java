@@ -18,11 +18,9 @@ import static java.nio.charset.StandardCharsets.UTF_8;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Preconditions;
-import com.google.common.collect.Interner;
-import com.google.devtools.build.lib.concurrent.BlazeInterners;
 import com.google.devtools.build.lib.concurrent.ThreadSafety.ThreadSafe;
 import com.google.devtools.build.lib.io.InconsistentFilesystemException;
-import com.google.devtools.build.lib.skyframe.serialization.autocodec.AutoCodec;
+import com.google.devtools.build.lib.skyframe.serialization.autocodec.SerializationConstant;
 import com.google.devtools.build.lib.util.Fingerprint;
 import com.google.devtools.build.lib.util.io.TimestampGranularityMonitor;
 import com.google.devtools.build.lib.vfs.Dirent;
@@ -33,9 +31,7 @@ import com.google.devtools.build.lib.vfs.Path;
 import com.google.devtools.build.lib.vfs.PathFragment;
 import com.google.devtools.build.lib.vfs.RootedPath;
 import com.google.devtools.build.lib.vfs.Symlinks;
-import com.google.devtools.build.lib.vfs.UnixGlob.FilesystemCalls;
-import com.google.devtools.build.skyframe.AbstractSkyKey;
-import com.google.devtools.build.skyframe.SkyFunctionName;
+import com.google.devtools.build.lib.vfs.SyscallCache;
 import com.google.devtools.build.skyframe.SkyValue;
 import java.io.IOException;
 import java.util.Arrays;
@@ -62,25 +58,29 @@ import javax.annotation.Nullable;
  * <p>All subclasses must implement {@link #equals} and {@link #hashCode} properly.
  */
 public abstract class FileStateValue implements HasDigest, SkyValue {
-  public static final SkyFunctionName FILE_STATE = SkyFunctionName.createNonHermetic("FILE_STATE");
-
-  @AutoCodec
+  @SerializationConstant
   public static final DirectoryFileStateValue DIRECTORY_FILE_STATE_NODE =
       new DirectoryFileStateValue();
 
-  @AutoCodec
+  @SerializationConstant
   public static final NonexistentFileStateValue NONEXISTENT_FILE_STATE_NODE =
       new NonexistentFileStateValue();
 
   private FileStateValue() {}
 
   public static FileStateValue create(
-      RootedPath rootedPath,
-      FilesystemCalls syscallCache,
-      @Nullable TimestampGranularityMonitor tsgm)
+      RootedPath rootedPath, SyscallCache syscallCache, @Nullable TimestampGranularityMonitor tsgm)
       throws IOException {
     Path path = rootedPath.asPath();
-    Dirent.Type type = syscallCache.getType(path, Symlinks.NOFOLLOW);
+    SyscallCache.DirentTypeWithSkip typeWithSkip = syscallCache.getType(path, Symlinks.NOFOLLOW);
+    FileStatus stat = null;
+    Dirent.Type type = null;
+    if (typeWithSkip == SyscallCache.DirentTypeWithSkip.FILESYSTEM_OP_SKIPPED) {
+      stat = syscallCache.statIfFound(path, Symlinks.NOFOLLOW);
+      type = SyscallCache.statusToDirentType(stat);
+    } else if (typeWithSkip != null) {
+      type = typeWithSkip.getType();
+    }
     if (type == null) {
       return NONEXISTENT_FILE_STATE_NODE;
     }
@@ -91,7 +91,9 @@ public abstract class FileStateValue implements HasDigest, SkyValue {
         return new SymlinkFileStateValue(path.readSymbolicLinkUnchecked());
       case FILE:
       case UNKNOWN:
-        FileStatus stat = syscallCache.statIfFound(path, Symlinks.NOFOLLOW);
+        if (stat == null) {
+          stat = syscallCache.statIfFound(path, Symlinks.NOFOLLOW);
+        }
         if (stat == null) {
           throw new InconsistentFilesystemException(
               "File " + rootedPath + " found in directory, but stat failed");
@@ -138,32 +140,37 @@ public abstract class FileStateValue implements HasDigest, SkyValue {
         + "neither a file nor directory nor symlink.");
   }
 
-  @VisibleForTesting
   @ThreadSafe
-  public static Key key(RootedPath rootedPath) {
-    return Key.create(rootedPath);
-  }
-
-  /** Key type for FileStateValue. */
-  @AutoCodec.VisibleForSerialization
-  @AutoCodec
-  public static class Key extends AbstractSkyKey<RootedPath> {
-    private static final Interner<Key> interner = BlazeInterners.newWeakInterner();
-
-    private Key(RootedPath arg) {
-      super(arg);
-    }
-
-    @AutoCodec.VisibleForSerialization
-    @AutoCodec.Instantiator
-    static Key create(RootedPath arg) {
-      return interner.intern(new Key(arg));
-    }
-
-    @Override
-    public SkyFunctionName functionName() {
-      return FILE_STATE;
-    }
+  public static RootedPath key(RootedPath rootedPath) {
+    // RootedPath is already the SkyKey we want; see FileStateKey. This method and that interface
+    // are provided as readability aids.
+    //
+    // We used to weakly intern all key instances but no longer do so after concluding the data
+    // structure overhead of the intern was a net negative wrt retained heap. The current approach
+    // of interning nothing is instead a net positive (saved ~0.1% when implemented in Feb 2022).
+    //
+    // A specific call to #key is going to be for one of the following important use-cases:
+    //   * FileFunction computing a specific FileValue (FV) node, declaring a Skyframe dep on a
+    //     specific FileStateValue (FSV) node. There are two things to consider:
+    //     * A specific FSV node will have exactly one rdep so there's no business-logic reason
+    //       interning of the RootedPath here would be productive. One exception to this reasoning
+    //       is symlinks: if paths `a` and `b` are both symlinks to `c` and Blaze needs to consider
+    //       `a` and `b`, then it'll have nodes FV(a); FV(b); FSV(a); FSV(b); FSV(c) and forward
+    //       edge sets FV(a)->{FSV(a); FSV(c)}; FV(b)->{FSV(b); FSV(c)}. So our current
+    //       non-interning approach will mean we have different RootedPath instances for right
+    //       endpoints of edges FV(a)->FSV(c); FV(b)->FSV(c). This is an acceptable inefficiency
+    //       because this situation is not common and not worth optimizing for.
+    //     * The Skyframe engine implementation effectively deduplicates the set of Skyframe deps of
+    //       a node declared by a skyFunction.compute(k, env), across all Skyframe restarts. So
+    //       there's no concern about a specific FV node causing many equivalent RootedPath
+    //       instances to be retained, due to Skyframe restarts of FileFunction.
+    //   * SkyQuery's RBuildFilesVisitor, creating a root node for a graph traversal for query
+    //     evaluation. The set of RootedPaths used for these roots is both low in number and also
+    //     deduped, so interning RootedPath here isn't productive. Also, these objects are not
+    //     retained for long anyway so it's fine to have some garbage churn.
+    //   * SkyframeExecutor, creating a root node for an invalidation traversal. Same reasoning as
+    //     above.
+    return rootedPath;
   }
 
   public abstract FileStateType getType();
@@ -204,12 +211,12 @@ public abstract class FileStateValue implements HasDigest, SkyValue {
    * fast digest lookups are not available.
    */
   @ThreadSafe
-  @AutoCodec
   public static final class RegularFileStateValue extends FileStateValue {
     private final long size;
     @Nullable private final byte[] digest;
     @Nullable private final FileContentsProxy contentsProxy;
 
+    @VisibleForTesting
     public RegularFileStateValue(long size, byte[] digest, FileContentsProxy contentsProxy) {
       Preconditions.checkState((digest == null) != (contentsProxy == null));
       this.size = size;
@@ -340,16 +347,18 @@ public abstract class FileStateValue implements HasDigest, SkyValue {
   }
 
   /** Implementation of {@link FileStateValue} for special files that exist. */
-  @AutoCodec
+  @VisibleForTesting
   public static final class SpecialFileStateValue extends FileStateValue {
     private final FileContentsProxy contentsProxy;
 
+    @VisibleForTesting
     public SpecialFileStateValue(FileContentsProxy contentsProxy) {
       this.contentsProxy = Preconditions.checkNotNull(contentsProxy);
     }
 
-    static SpecialFileStateValue fromStat(PathFragment path, FileStatus stat,
-        @Nullable TimestampGranularityMonitor tsgm) throws IOException {
+    private static SpecialFileStateValue fromStat(
+        PathFragment path, FileStatus stat, @Nullable TimestampGranularityMonitor tsgm)
+        throws IOException {
       // Note that TimestampGranularityMonitor#notifyDependenceOnFileTime is a thread-safe method.
       if (tsgm != null) {
         tsgm.notifyDependenceOnFileTime(path, stat.getLastChangeTime());
@@ -447,11 +456,12 @@ public abstract class FileStateValue implements HasDigest, SkyValue {
   }
 
   /** Implementation of {@link FileStateValue} for symlinks. */
-  @AutoCodec
+  @VisibleForTesting
   public static final class SymlinkFileStateValue extends FileStateValue {
 
     private final PathFragment symlinkTarget;
 
+    @VisibleForTesting
     public SymlinkFileStateValue(PathFragment symlinkTarget) {
       this.symlinkTarget = symlinkTarget;
     }
@@ -497,8 +507,7 @@ public abstract class FileStateValue implements HasDigest, SkyValue {
   }
 
   /** Implementation of {@link FileStateValue} for nonexistent files. */
-  @AutoCodec.VisibleForSerialization
-  static final class NonexistentFileStateValue extends FileStateValue {
+  private static final class NonexistentFileStateValue extends FileStateValue {
     private static final byte[] FINGERPRINT = "NonexistentFileStateValue".getBytes(UTF_8);
 
     private NonexistentFileStateValue() {}

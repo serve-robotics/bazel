@@ -17,6 +17,7 @@ package com.google.devtools.build.lib.testutil;
 import static com.google.devtools.build.lib.rules.cpp.CppRuleClasses.CROSSTOOL_LABEL;
 
 import com.google.common.collect.ImmutableList;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 
 /**
  * Various constants required by the tests.
@@ -82,6 +83,12 @@ public class TestConstants {
   public static final String CPU_TIME_SPENDER_PATH =
       "io_bazel/src/test/shell/integration/spend_cpu_time";
 
+  /**
+   * Directory where we can find Bazel's own bootstrapping rules relative to a test's runfiles
+   * directory, i.e. when //tools/build_rules:srcs is in a test's data.
+   */
+  public static final String BUILD_RULES_DATA_PATH = "io_bazel/tools/build_rules/";
+
   public static final String TEST_RULE_CLASS_PROVIDER =
       "com.google.devtools.build.lib.bazel.rules.BazelRuleClassProvider";
   public static final String TEST_RULE_MODULE =
@@ -98,7 +105,7 @@ public class TestConstants {
   public static final String MOCK_CC_CROSSTOOL_PATH = "tools/cpp";
 
   /** The workspace repository label under which built-in tools reside. */
-  public static final String TOOLS_REPOSITORY = "@bazel_tools";
+  public static final RepositoryName TOOLS_REPOSITORY = RepositoryName.BAZEL_TOOLS;
   /** The file path in which to create files so that they end up under {@link #TOOLS_REPOSITORY}. */
   public static final String TOOLS_REPOSITORY_SCRATCH = "embedded_tools/";
 
@@ -129,12 +136,13 @@ public class TestConstants {
           "--incompatible_py3_is_default=false",
           "--incompatible_py2_outputs_are_suffixed=false",
           // TODO(#7849): Remove after flag flip.
-          "--incompatible_use_toolchain_resolution_for_java_rules",
-          "--incompatible_disable_native_apple_binary_rule=false");
+          "--incompatible_use_toolchain_resolution_for_java_rules");
 
   /** Partial query to filter out implicit dependencies of C/C++ rules. */
   public static final String CC_DEPENDENCY_CORRECTION =
-      " - deps(" + TOOLS_REPOSITORY + CROSSTOOL_LABEL + ")";
+      " - deps(" + TOOLS_REPOSITORY + CROSSTOOL_LABEL + ")"
+      + " - deps(" + TOOLS_REPOSITORY + "//tools/cpp:current_cc_toolchain)"
+      + " - deps(" + TOOLS_REPOSITORY + "//tools/cpp:grep-includes)";
 
   public static final String PLATFORM_PACKAGE_ROOT = "@bazel_tools//platforms";
   public static final String CONSTRAINTS_PACKAGE_ROOT = "@platforms//";
@@ -152,6 +160,10 @@ public class TestConstants {
 
   /** The launcher used by Bazel. */
   public static final String LAUNCHER_PATH = "@bazel_tools//tools/launcher:launcher";
+
+  /** The target name for ProGuard's allowlister. */
+  public static final String PROGUARD_ALLOWLISTER_TARGET =
+      "@bazel_tools//tools/jdk:proguard_whitelister";
 
   /** A choice of test execution mode, only varies internally. */
   public enum InternalTestExecutionMode {

@@ -130,12 +130,6 @@ final class PlatformMappingFunction implements SkyFunction {
         .build();
   }
 
-  @Nullable
-  @Override
-  public String extractTag(SkyKey skyKey) {
-    return null;
-  }
-
   @VisibleForTesting
   static final class PlatformMappingException extends SkyFunctionException {
 
@@ -193,7 +187,7 @@ final class PlatformMappingFunction implements SkyFunction {
     }
 
     try {
-      return platformsToFlags.build();
+      return platformsToFlags.buildOrThrow();
     } catch (IllegalArgumentException e) {
       throw parsingException(
           "Got duplicate platform entries but each platform key must be unique", e);
@@ -210,7 +204,7 @@ final class PlatformMappingFunction implements SkyFunction {
     }
 
     try {
-      return flagsToPlatforms.build();
+      return flagsToPlatforms.buildOrThrow();
     } catch (IllegalArgumentException e) {
       throw parsingException("Got duplicate flags entries but each flags key must be unique", e);
     }

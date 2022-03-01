@@ -25,6 +25,7 @@ import com.google.common.base.Ascii;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.util.concurrent.AsyncCallable;
 import com.google.common.util.concurrent.FluentFuture;
@@ -39,6 +40,7 @@ import com.google.devtools.build.lib.actions.SpawnResult;
 import com.google.devtools.build.lib.actions.Spawns;
 import com.google.devtools.build.lib.authandtls.CallCredentialsProvider;
 import com.google.devtools.build.lib.remote.ExecutionStatusException;
+import com.google.devtools.build.lib.remote.common.BulkTransferException;
 import com.google.devtools.build.lib.remote.common.CacheNotFoundException;
 import com.google.devtools.build.lib.remote.common.OutputDigestMismatchException;
 import com.google.devtools.build.lib.remote.common.RemoteCacheClient.ActionKey;
@@ -71,6 +73,7 @@ import java.text.DecimalFormatSymbols;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.function.BiFunction;
@@ -433,7 +436,8 @@ public final class Utils {
       Digest inputRoot,
       @Nullable Platform platform,
       java.time.Duration timeout,
-      boolean cacheable) {
+      boolean cacheable,
+      @Nullable ByteString salt) {
     Action.Builder action = Action.newBuilder();
     action.setCommandDigest(command);
     action.setInputRootDigest(inputRoot);
@@ -445,6 +449,9 @@ public final class Utils {
     }
     if (platform != null) {
       action.setPlatform(platform);
+    }
+    if (salt != null) {
+      action.setSalt(salt);
     }
     return action.build();
   }
@@ -592,31 +599,99 @@ public final class Utils {
   }
 
   public static boolean shouldUploadLocalResultsToRemoteCache(
-      RemoteOptions remoteOptions, @Nullable Spawn spawn) {
+      RemoteOptions remoteOptions, Map<String, String> executionInfo) {
     return remoteOptions.remoteUploadLocalResults
-        && (spawn == null || Spawns.mayBeCachedRemotely(spawn));
+        && Spawns.mayBeCachedRemotely(executionInfo)
+        && !executionInfo.containsKey(ExecutionRequirements.NO_REMOTE_CACHE_UPLOAD);
+  }
+
+  public static boolean shouldUploadLocalResultsToRemoteCache(
+      RemoteOptions remoteOptions, @Nullable Spawn spawn) {
+    ImmutableMap<String, String> executionInfo = null;
+    if (spawn != null) {
+      executionInfo = spawn.getExecutionInfo();
+    }
+    return shouldUploadLocalResultsToRemoteCache(remoteOptions, executionInfo);
+  }
+
+  public static boolean shouldUploadLocalResultsToDiskCache(
+      RemoteOptions remoteOptions, Map<String, String> executionInfo) {
+    if (remoteOptions.incompatibleRemoteResultsIgnoreDisk) {
+      return Spawns.mayBeCached(executionInfo);
+    } else {
+      return remoteOptions.remoteUploadLocalResults && Spawns.mayBeCached(executionInfo);
+    }
   }
 
   public static boolean shouldUploadLocalResultsToDiskCache(
       RemoteOptions remoteOptions, @Nullable Spawn spawn) {
+    ImmutableMap<String, String> executionInfo = null;
+    if (spawn != null) {
+      executionInfo = spawn.getExecutionInfo();
+    }
+    return shouldUploadLocalResultsToDiskCache(remoteOptions, executionInfo);
+  }
+
+  public static boolean shouldUploadLocalResultsToCombinedDisk(
+      RemoteOptions remoteOptions, Map<String, String> executionInfo) {
     if (remoteOptions.incompatibleRemoteResultsIgnoreDisk) {
-      return spawn == null || Spawns.mayBeCached(spawn);
+      // If --incompatible_remote_results_ignore_disk is set, we treat the disk cache part as local
+      // cache. Actions which are tagged with `no-remote-cache` can still hit the disk cache.
+      return shouldUploadLocalResultsToDiskCache(remoteOptions, executionInfo);
     } else {
-      return remoteOptions.remoteUploadLocalResults && (spawn == null || Spawns.mayBeCached(spawn));
+      // Otherwise, it's treated as a remote cache and disabled for `no-remote-cache`.
+      return shouldUploadLocalResultsToRemoteCache(remoteOptions, executionInfo);
     }
   }
 
   public static boolean shouldUploadLocalResultsToCombinedDisk(
       RemoteOptions remoteOptions, @Nullable Spawn spawn) {
-    if (remoteOptions.incompatibleRemoteResultsIgnoreDisk) {
-      // If --incompatible_remote_results_ignore_disk is set, we treat the disk cache part as local
-      // cache. Actions
-      // which are tagged with `no-remote-cache` can still hit the disk cache.
-      return spawn == null || Spawns.mayBeCached(spawn);
-    } else {
-      // Otherwise, it's treated as a remote cache and disabled for `no-remote-cache`.
-      return remoteOptions.remoteUploadLocalResults
-          && (spawn == null || Spawns.mayBeCachedRemotely(spawn));
+    ImmutableMap<String, String> executionInfo = null;
+    if (spawn != null) {
+      executionInfo = spawn.getExecutionInfo();
+    }
+    return shouldUploadLocalResultsToCombinedDisk(remoteOptions, executionInfo);
+  }
+
+  public static void waitForBulkTransfer(
+      Iterable<? extends ListenableFuture<?>> transfers, boolean cancelRemainingOnInterrupt)
+      throws BulkTransferException, InterruptedException {
+    BulkTransferException bulkTransferException = null;
+    InterruptedException interruptedException = null;
+    boolean interrupted = Thread.currentThread().isInterrupted();
+    for (ListenableFuture<?> transfer : transfers) {
+      try {
+        if (interruptedException == null) {
+          // Wait for all transfers to finish.
+          getFromFuture(transfer, cancelRemainingOnInterrupt);
+        } else {
+          transfer.cancel(true);
+        }
+      } catch (IOException e) {
+        if (bulkTransferException == null) {
+          bulkTransferException = new BulkTransferException();
+        }
+        bulkTransferException.add(e);
+      } catch (InterruptedException e) {
+        interrupted = Thread.interrupted() || interrupted;
+        interruptedException = e;
+        if (!cancelRemainingOnInterrupt) {
+          // leave the rest of the transfers alone
+          break;
+        }
+      }
+    }
+    if (interrupted) {
+      Thread.currentThread().interrupt();
+    }
+    if (interruptedException != null) {
+      if (bulkTransferException != null) {
+        interruptedException.addSuppressed(bulkTransferException);
+      }
+      throw interruptedException;
+    }
+    if (bulkTransferException != null) {
+      throw bulkTransferException;
     }
   }
 }

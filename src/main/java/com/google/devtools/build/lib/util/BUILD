@@ -29,6 +29,17 @@ java_library(
 )
 
 java_library(
+    name = "execution_detailed_exit_code_helper",
+    srcs = ["ExecutionDetailedExitCodeHelper.java"],
+    deps = [
+        ":detailed_exit_code",
+        "//src/main/java/com/google/devtools/build/skyframe",
+        "//src/main/protobuf:failure_details_java_proto",
+        "//third_party:flogger",
+    ],
+)
+
+java_library(
     name = "os",
     srcs = ["OS.java"],
 )
@@ -184,6 +195,7 @@ java_library(
         "//src/main/java/com/google/devtools/build/lib/collect/compacthashset",
         "//src/main/java/com/google/devtools/build/lib/concurrent",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
+        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec:serialization-constant",
         "//src/main/java/com/google/devtools/build/lib/vfs",
         "//src/main/java/com/google/devtools/build/lib/vfs:pathfragment",
         "//src/main/java/com/google/devtools/common/options",
@@ -192,6 +204,7 @@ java_library(
         "//third_party:flogger",
         "//third_party:guava",
         "//third_party:jsr305",
+        "//third_party/protobuf:protobuf_java",
     ],
 )
 
@@ -204,6 +217,7 @@ java_library(
     deps = [
         ":string",
         "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec",
+        "//src/main/java/com/google/devtools/build/lib/skyframe/serialization/autocodec:serialization-constant",
         "//src/main/java/com/google/devtools/build/lib/vfs:ospathpolicy",
         "//third_party:guava",
         "//third_party:jsr305",
@@ -245,7 +259,6 @@ java_library(
     deps = [
         "//src/main/java/com/google/devtools/build/lib/concurrent",
         "//third_party:guava",
-        "//third_party:jsr305",
     ],
 )
 
@@ -317,7 +330,6 @@ java_library(
     deps = [
         ":abrupt_exit_exception",
         ":detailed_exit_code",
-        ":exit_code",
         "//src/main/protobuf:failure_details_java_proto",
     ],
 )

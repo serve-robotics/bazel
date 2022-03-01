@@ -59,7 +59,7 @@ public class ToolchainTypeLookupUtilTest extends ToolchainTestCase {
       return ImmutableMap.<SkyFunctionName, SkyFunction>builder()
           .putAll(super.getSkyFunctions(directories))
           .put(GET_TOOLCHAIN_TYPE_INFO_FUNCTION, new GetToolchainTypeInfoFunction())
-          .build();
+          .buildOrThrow();
     }
   }
 
@@ -220,12 +220,6 @@ public class ToolchainTypeLookupUtilTest extends ToolchainTestCase {
       } catch (InvalidToolchainTypeException e) {
         throw new GetToolchainTypeInfoFunctionException(e);
       }
-    }
-
-    @Nullable
-    @Override
-    public String extractTag(SkyKey skyKey) {
-      return null;
     }
   }
 

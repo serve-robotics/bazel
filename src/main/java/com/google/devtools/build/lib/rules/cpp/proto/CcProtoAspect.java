@@ -33,7 +33,9 @@ import com.google.devtools.build.lib.analysis.RuleErrorConsumer;
 import com.google.devtools.build.lib.analysis.TransitiveInfoCollection;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProviderMap;
 import com.google.devtools.build.lib.analysis.TransitiveInfoProviderMapBuilder;
+import com.google.devtools.build.lib.analysis.config.ToolchainTypeRequirement;
 import com.google.devtools.build.lib.cmdline.Label;
+import com.google.devtools.build.lib.cmdline.RepositoryName;
 import com.google.devtools.build.lib.collect.nestedset.NestedSet;
 import com.google.devtools.build.lib.collect.nestedset.NestedSetBuilder;
 import com.google.devtools.build.lib.packages.AspectDefinition;
@@ -102,7 +104,7 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
       ConfiguredTargetAndData ctadBase,
       RuleContext ruleContext,
       AspectParameters parameters,
-      String toolsRepository)
+      RepositoryName toolsRepository)
       throws InterruptedException, ActionConflictException {
     ProtoInfo protoInfo = checkNotNull(ctadBase.getConfiguredTarget().get(ProtoInfo.PROVIDER));
 
@@ -123,7 +125,12 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
             .propagateAlongAttribute("deps")
             .requiresConfigurationFragments(CppConfiguration.class, ProtoConfiguration.class)
             .requireStarlarkProviders(ProtoInfo.PROVIDER.id())
-            .addRequiredToolchains(ccToolchainType)
+            .addToolchainType(
+                ToolchainTypeRequirement.builder(ccToolchainType)
+                    // TODO(https://github.com/bazelbuild/bazel/issues/14727): Evaluate whether this
+                    // can be optional.
+                    .mandatory(true)
+                    .build())
             .useToolchainTransition(true)
             .add(
                 attr(PROTO_TOOLCHAIN_ATTR, LABEL)
@@ -440,7 +447,8 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
       helper.addAdditionalExportedHeaders(headers.build());
     }
 
-    private void createProtoCompileAction(Collection<Artifact> outputs) {
+    private void createProtoCompileAction(Collection<Artifact> outputs)
+        throws RuleErrorException, InterruptedException {
       PathFragment protoRootFragment = PathFragment.create(protoInfo.getDirectProtoSourceRoot());
       String genfilesPath;
       PathFragment genfilesFragment = ruleContext.getGenfilesFragment();
@@ -457,9 +465,8 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
           ruleContext,
           invocations.build(),
           protoInfo,
-          ruleContext.getLabel(),
           outputs,
-          "C++",
+          "Generating C++ proto_library %{label}",
           Exports.DO_NOT_USE,
           Services.ALLOW);
     }
@@ -471,8 +478,7 @@ public abstract class CcProtoAspect extends NativeAspectClass implements Configu
     public void addProviders(ConfiguredAspect.Builder builder) {
       OutputGroupInfo outputGroupInfo = new OutputGroupInfo(outputGroups);
       builder.addProvider(
-          new CcProtoLibraryProviders(
-              filesBuilder.build(), ccLibraryProviders, outputGroupInfo));
+          new CcProtoLibraryProviders(filesBuilder.build(), ccLibraryProviders, outputGroupInfo));
       builder.addProviders(ccLibraryProviders);
       builder.addNativeDeclaredProvider(outputGroupInfo);
       if (headerProvider != null) {

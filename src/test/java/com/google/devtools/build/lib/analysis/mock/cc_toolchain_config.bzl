@@ -32,6 +32,7 @@ load(
 load("@bazel_tools//tools/build_defs/cc:action_names.bzl", "ACTION_NAMES")
 
 _FEATURE_NAMES = struct(
+    generate_pdb_file = "generate_pdb_file",
     no_legacy_features = "no_legacy_features",
     do_not_split_linking_cmdline = "do_not_split_linking_cmdline",
     supports_dynamic_linker = "supports_dynamic_linker",
@@ -72,6 +73,9 @@ _FEATURE_NAMES = struct(
     enable_fdo_split_functions = "enable_fdo_split_functions",
     fdo_split_functions = "fdo_split_functions",
     fdo_instrument = "fdo_instrument",
+    fsafdo = "fsafdo",
+    implicit_fsafdo = "implicit_fsafdo",
+    enable_fsafdo = "enable_fsafdo",
     supports_pic = "supports_pic",
     copy_dynamic_libraries_to_binary = "copy_dynamic_libraries_to_binary",
     per_object_debug_info = "per_object_debug_info",
@@ -616,6 +620,36 @@ _enable_fdo_split_functions_feature = feature(
 
 _fdo_split_functions_feature = feature(name = _FEATURE_NAMES.fdo_split_functions)
 
+_enable_fsafdo_feature = feature(
+    name = _FEATURE_NAMES.enable_fsafdo,
+    requires = [feature_set(features = ["implicit_fsafdo"])],
+    implies = ["fsafdo"],
+)
+
+_implicit_fsafdo_feature = feature(name = _FEATURE_NAMES.implicit_fsafdo)
+
+_fsafdo_feature = feature(
+    name = _FEATURE_NAMES.fsafdo,
+    requires = [feature_set(features = ["autofdo"])],
+    flag_sets = [
+        flag_set(
+            actions = [
+                ACTION_NAMES.c_compile,
+                ACTION_NAMES.cpp_compile,
+                ACTION_NAMES.cpp_module_codegen,
+                ACTION_NAMES.lto_backend,
+            ],
+            flag_groups = [
+                flag_group(
+                    flags = [
+                        "-fsafdo",
+                    ],
+                ),
+            ],
+        ),
+    ],
+)
+
 _native_deps_link_feature = feature(
     name = _FEATURE_NAMES.native_deps_link,
     flag_sets = [
@@ -764,6 +798,10 @@ _per_object_debug_info_feature = feature(
 
 _copy_dynamic_libraries_to_binary_feature = feature(
     name = _FEATURE_NAMES.copy_dynamic_libraries_to_binary,
+)
+
+_generate_pdb_file_feature = feature(
+    name = _FEATURE_NAMES.generate_pdb_file,
 )
 
 _supports_start_end_lib_feature = feature(
@@ -1275,6 +1313,9 @@ _feature_name_to_feature = {
     _FEATURE_NAMES.fdo_split_functions: _fdo_split_functions_feature,
     _FEATURE_NAMES.enable_xbinaryfdo_thinlto: _enable_xbinaryfdo_thinlto_feature,
     _FEATURE_NAMES.xbinaryfdo_implicit_thinlto: _xbinaryfdo_implicit_thinlto_feature,
+    _FEATURE_NAMES.fsafdo: _fsafdo_feature,
+    _FEATURE_NAMES.implicit_fsafdo: _implicit_fsafdo_feature,
+    _FEATURE_NAMES.enable_fsafdo: _enable_fsafdo_feature,
     _FEATURE_NAMES.native_deps_link: _native_deps_link_feature,
     _FEATURE_NAMES.java_launcher_link: _java_launcher_link_feature,
     _FEATURE_NAMES.py_launcher_link: _py_launcher_link_feature,
@@ -1317,6 +1358,7 @@ _feature_name_to_feature = {
     _FEATURE_NAMES.disable_pbh: _disable_pbh_feature,
     _FEATURE_NAMES.optional_cc_flags_feature: _optional_cc_flags_feature,
     _FEATURE_NAMES.cpp_compile_with_requirements: _cpp_compile_with_requirements,
+    _FEATURE_NAMES.generate_pdb_file: _generate_pdb_file_feature,
     "header_modules_feature_configuration": _header_modules_feature_configuration,
     "env_var_feature_configuration": _env_var_feature_configuration,
     "host_and_nonhost_configuration": _host_and_nonhost_configuration,

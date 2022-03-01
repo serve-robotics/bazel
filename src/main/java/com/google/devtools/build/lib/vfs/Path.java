@@ -56,6 +56,8 @@ import javax.annotation.Nullable;
 @ThreadSafe
 @AutoCodec
 public class Path implements Comparable<Path>, FileType.HasFileType {
+  @SuppressWarnings("GoodTime-ApiWithNumericTimeUnit")
+  public static final long NOW_SENTINEL_TIME = -1L;
 
   private final PathFragment pathFragment;
   private final FileSystem fileSystem;
@@ -634,14 +636,14 @@ public class Path implements Comparable<Path>, FileType.HasFileType {
 
   /**
    * Sets the modification time of the file denoted by the current path. Follows symbolic links. If
-   * newTime is -1, the current time according to the kernel is used; this may differ from the JVM's
-   * clock.
+   * newTime is {@link #NOW_SENTINEL_TIME}, the current time according to the kernel is used; this
+   * may differ from the JVM's clock.
    *
    * <p>Caveat: many filesystems store file times in seconds, so do not rely on the millisecond
    * precision.
    *
-   * @param newTime time, in milliseconds since the UNIX epoch, or -1L, meaning use the kernel's
-   *     current time
+   * @param newTime time, in milliseconds since the UNIX epoch, or {@link #NOW_SENTINEL_TIME},
+   *     meaning use the kernel's current time
    * @throws IOException if the modification time for the file could not be set for any reason
    */
   public void setLastModifiedTime(long newTime) throws IOException {
@@ -701,7 +703,7 @@ public class Path implements Comparable<Path>, FileType.HasFileType {
    * @return a string representation of the bash of the directory
    * @throws IOException if the digest could not be computed for any reason
    */
-  public String getDirectoryDigest() throws IOException {
+  public String getDirectoryDigest(SyscallCache syscallCache) throws IOException {
     ImmutableList<String> entries =
         ImmutableList.sortedCopyOf(fileSystem.getDirectoryEntries(asFragment()));
     Hasher hasher = fileSystem.getDigestFunction().getHashFunction().newHasher();
@@ -715,9 +717,10 @@ public class Path implements Comparable<Path>, FileType.HasFileType {
         } else {
           hasher.putChar('-');
         }
-        hasher.putBytes(DigestUtils.getDigestWithManualFallback(path, stat.getSize()));
+        hasher.putBytes(
+            DigestUtils.getDigestWithManualFallback(path, stat.getSize(), syscallCache));
       } else if (stat.isDirectory()) {
-        hasher.putChar('d').putUnencodedChars(path.getDirectoryDigest());
+        hasher.putChar('d').putUnencodedChars(path.getDirectoryDigest(syscallCache));
       } else if (stat.isSymbolicLink()) {
         PathFragment link = path.readSymbolicLink();
         if (link.isAbsolute()) {
@@ -729,7 +732,8 @@ public class Path implements Comparable<Path>, FileType.HasFileType {
               } else {
                 hasher.putChar('-');
               }
-              hasher.putBytes(DigestUtils.getDigestWithManualFallbackWhenSizeUnknown(resolved));
+              hasher.putBytes(
+                  DigestUtils.getDigestWithManualFallbackWhenSizeUnknown(resolved, syscallCache));
             } else {
               // link to a non-file: include the link itself in the hash
               hasher.putChar('l').putUnencodedChars(link.toString());

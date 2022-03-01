@@ -13,10 +13,10 @@ filegroup(
     name = "srcs",
     srcs = glob(["**"]) + [
         "//src/test/java/com/google/devtools/build/lib/actions:srcs",
-        "//src/test/java/com/google/devtools/build/lib/actionsketch:srcs",
         "//src/test/java/com/google/devtools/build/lib/analysis:srcs",
         "//src/test/java/com/google/devtools/build/lib/authandtls:srcs",
         "//src/test/java/com/google/devtools/build/lib/bazel:srcs",
+        "//src/test/java/com/google/devtools/build/lib/bazel/google:srcs",
         "//src/test/java/com/google/devtools/build/lib/blackbox:srcs",
         "//src/test/java/com/google/devtools/build/lib/buildeventservice:srcs",
         "//src/test/java/com/google/devtools/build/lib/buildeventstream:srcs",
@@ -28,6 +28,7 @@ filegroup(
         "//src/test/java/com/google/devtools/build/lib/dynamic:srcs",
         "//src/test/java/com/google/devtools/build/lib/events:srcs",
         "//src/test/java/com/google/devtools/build/lib/exec:srcs",
+        "//src/test/java/com/google/devtools/build/lib/generatedprojecttest:srcs",
         "//src/test/java/com/google/devtools/build/lib/generatedprojecttest/util:srcs",
         "//src/test/java/com/google/devtools/build/lib/graph:srcs",
         "//src/test/java/com/google/devtools/build/lib/io:srcs",
@@ -39,6 +40,7 @@ filegroup(
         "//src/test/java/com/google/devtools/build/lib/packages/metrics:srcs",
         "//src/test/java/com/google/devtools/build/lib/packages/semantics:srcs",
         "//src/test/java/com/google/devtools/build/lib/platform:srcs",
+        "//src/test/java/com/google/devtools/build/lib/platform/darwin:srcs",
         "//src/test/java/com/google/devtools/build/lib/profiler:srcs",
         "//src/test/java/com/google/devtools/build/lib/profiler/callcounts:srcs",
         "//src/test/java/com/google/devtools/build/lib/profiler/memory:srcs",
@@ -62,6 +64,10 @@ filegroup(
         "//src/test/java/com/google/devtools/build/lib/util:srcs",
         "//src/test/java/com/google/devtools/build/lib/testing/common:srcs",
         "//src/test/java/com/google/devtools/build/lib/testutil:srcs",
+        "//src/test/java/com/google/devtools/build/lib/view/cpp:srcs",
+        "//src/test/java/com/google/devtools/build/lib/view/go:srcs",
+        "//src/test/java/com/google/devtools/build/lib/view/java:srcs",
+        "//src/test/java/com/google/devtools/build/lib/view/util:srcs",
         "//src/test/java/com/google/devtools/build/lib/windows:srcs",
         "//src/test/java/com/google/devtools/build/lib/worker:srcs",
         "//src/test/java/net/starlark/java/annot/processor:srcs",
@@ -108,7 +114,10 @@ java_test(
             "runtime/*.java",
             "runtime/commands/*.java",
         ],
-        exclude = ["runtime/commands/ConfigCommandTest.java"],
+        exclude = [
+            "runtime/commands/ConfigCommandTest.java",
+            "runtime/commands/DumpCommandTest.java",
+        ],
     ),
     test_class = "com.google.devtools.build.lib.AllTests",
     deps = [
@@ -131,8 +140,9 @@ java_test(
         "//src/main/java/com/google/devtools/build/lib/analysis:config/build_options",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/core_options",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/fragment",
-        "//src/main/java/com/google/devtools/build/lib/analysis:config/fragment_class_set",
+        "//src/main/java/com/google/devtools/build/lib/analysis:config/fragment_factory",
         "//src/main/java/com/google/devtools/build/lib/analysis:config/fragment_options",
+        "//src/main/java/com/google/devtools/build/lib/analysis:config/fragment_registry",
         "//src/main/java/com/google/devtools/build/lib/analysis:configured_target",
         "//src/main/java/com/google/devtools/build/lib/analysis:server_directories",
         "//src/main/java/com/google/devtools/build/lib/analysis:test/test_configuration",
@@ -182,6 +192,8 @@ java_test(
         "//src/main/protobuf:test_status_java_proto",
         "//src/main/protobuf:wrappers_java_proto",
         "//src/test/java/com/google/devtools/build/lib/actions/util",
+        "//src/test/java/com/google/devtools/build/lib/analysis/util",
+        "//src/test/java/com/google/devtools/build/lib/buildtool/util",
         "//src/test/java/com/google/devtools/build/lib/events:testutil",
         "//src/test/java/com/google/devtools/build/lib/starlark/util",
         "//src/test/java/com/google/devtools/build/lib/testutil",
@@ -208,6 +220,23 @@ java_test(
     srcs = ["runtime/commands/ConfigCommandTest.java"],
     # TODO(bazel-team) The test is currently broken due to BazelAnalysisMock not supporting integration tests.
     tags = ["manual"],
+)
+
+java_test(
+    name = "DumpCommandTest",
+    srcs = ["runtime/commands/DumpCommandTest.java"],
+    deps = [
+        "//src/main/java/com/google/devtools/build/lib:runtime",
+        "//src/main/java/com/google/devtools/build/lib:runtime/blaze_command_result",
+        "//src/main/java/com/google/devtools/build/lib/analysis:view_creation_failed_exception",
+        "//src/main/java/com/google/devtools/build/lib/runtime/commands",
+        "//src/main/java/com/google/devtools/build/lib/util:exit_code",
+        "//src/main/java/com/google/devtools/build/lib/util/io",
+        "//src/test/java/com/google/devtools/build/lib/buildtool/util",
+        "//third_party:guava",
+        "//third_party:junit4",
+        "//third_party:truth",
+    ],
 )
 
 TEST_SUITES = [

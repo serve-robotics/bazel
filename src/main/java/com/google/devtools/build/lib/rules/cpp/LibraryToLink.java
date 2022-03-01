@@ -129,7 +129,8 @@ public abstract class LibraryToLink implements LibraryToLinkApi<Artifact, LtoBac
   public final Dict<Artifact, LtoBackendArtifacts> getSharedNonLtoBackendsForStarlark(
       StarlarkThread thread) throws EvalException {
     CcModule.checkPrivateStarlarkificationAllowlist(thread);
-    return Dict.immutableCopyOf(getSharedNonLtoBackends());
+    ImmutableMap<Artifact, LtoBackendArtifacts> backends = getSharedNonLtoBackends();
+    return backends != null ? Dict.immutableCopyOf(backends) : null;
   }
 
   @Override
@@ -148,7 +149,8 @@ public abstract class LibraryToLink implements LibraryToLinkApi<Artifact, LtoBac
   public final Dict<Artifact, LtoBackendArtifacts> getPicSharedNonLtoBackendsForStarlark(
       StarlarkThread thread) throws EvalException {
     CcModule.checkPrivateStarlarkificationAllowlist(thread);
-    return Dict.immutableCopyOf(getPicSharedNonLtoBackends());
+    ImmutableMap<Artifact, LtoBackendArtifacts> backends = getPicSharedNonLtoBackends();
+    return backends != null ? Dict.immutableCopyOf(backends) : null;
   }
 
   LinkerInputs.LibraryToLink getStaticLibraryToLink() {
@@ -361,18 +363,6 @@ public abstract class LibraryToLink implements LibraryToLinkApi<Artifact, LtoBac
       public final LibraryToLink build() {
         LibraryToLink result = autoBuild();
         Preconditions.checkNotNull(result.getLibraryIdentifier(), result);
-        Preconditions.checkState(
-            (result.getObjectFiles() == null
-                    && result.getLtoCompilationContext() == null
-                    && result.getSharedNonLtoBackends() == null)
-                || result.getStaticLibrary() != null,
-            result);
-        Preconditions.checkState(
-            (result.getPicObjectFiles() == null
-                    && result.getPicLtoCompilationContext() == null
-                    && result.getPicSharedNonLtoBackends() == null)
-                || result.getPicStaticLibrary() != null,
-            result);
         Preconditions.checkState(
             result.getResolvedSymlinkDynamicLibrary() == null || result.getDynamicLibrary() != null,
             result);

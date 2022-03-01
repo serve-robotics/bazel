@@ -55,7 +55,7 @@ public class WorkerModule extends BlazeModule {
   public void beforeCommand(CommandEnvironment env) {
     this.env = env;
     env.getEventBus().register(this);
-    WorkerMultiplexerManager.beforeCommand(env);
+    WorkerMultiplexerManager.beforeCommand(env.getReporter());
   }
 
   @Subscribe
@@ -159,7 +159,9 @@ public class WorkerModule extends BlazeModule {
             // TODO(buchgr): Replace singleton by a command-scoped RunfilesTreeUpdater
             RunfilesTreeUpdater.INSTANCE,
             env.getOptions().getOptions(WorkerOptions.class),
-            env.getEventBus());
+            env.getEventBus(),
+            Runtime.getRuntime(),
+            env.getSyscallCache());
     ExecutionOptions executionOptions =
         checkNotNull(env.getOptions().getOptions(ExecutionOptions.class));
     registryBuilder.registerStrategy(
