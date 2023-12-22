@@ -11,6 +11,7 @@ from __future__ import division
 from __future__ import print_function
 
 import sys
+import signal
 
 # The Python interpreter unconditionally prepends the directory containing this
 # script (following symlinks) to the import path. This is the cause of #9239,
@@ -521,7 +522,20 @@ def Main():
     # (So that the data files are accessible)
     if os.environ.get('RUN_UNDER_RUNFILES') == '1':
       workspace = os.path.join(module_space, '%workspace_name%')
-
+    try:
+      p = subprocess.Popen(args)
+      p.wait()
+    except KeyboardInterrupt:
+      p.send_signal(signal.SIGINT)
+      p.wait()
+    except:
+      p.kill()
+      p.wait()
+    finally:
+      ret_code = p.returncode
+      shutil.rmtree(os.path.dirname(module_space), True)
+      MaybeEmitHostVersionWarning(ret_code)
+      sys.exit(ret_code)
   try:
     sys.stdout.flush()
     ExecuteFile(
